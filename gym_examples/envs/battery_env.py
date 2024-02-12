@@ -50,6 +50,7 @@ class SimpleBatteryEnv(gym.Env):
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
         self.nhistory = 10
+        self.avoid_penalty = False
         for key, val in kwargs.items():
             if key == "mode" and val == "fine_control":
                 self.mode = Mode.FINE_CONTROL
@@ -72,6 +73,9 @@ class SimpleBatteryEnv(gym.Env):
 
             elif key == "nhistory":
                 self.nhistory = int(val)
+
+            elif key == "avoid_penalty":
+                self.avoid_penalty = bool(val)
 
         self.window = None
         self.clock = None
@@ -199,7 +203,7 @@ class SimpleBatteryEnv(gym.Env):
             lmp_diff_sigmoid = np.divide(1., 1. + np.exp(-lmp_diff))
             obs = lmp_diff_sigmoid
         if self.mode == Mode.PENALIZE_WAIT:
-            obs = np.append(obs, [self.num_buys, self.bought_prices[0]])
+            obs = np.append(obs, [self.num_buys, self.bought_prices[0], self.steps_since_last_sold])
 
         return obs
 
@@ -213,11 +217,11 @@ class SimpleBatteryEnv(gym.Env):
         if self.mode == Mode.LONG_CHARGE and self.ncharges_left > 0:
             action = 2 # TODO: Magic number
 
-        max_charge = self.battery_storage >= self.battery_capacity
+        max_charge = self.battery_storage >= self.battery_capacity or self.num_buys == self.max_buys
         min_charge = self.battery_storage <= 0
         if (action == 2 and max_charge) or (action == 0 and min_charge):
             # penalize if we tried to buy
-            if self.mode == Mode.PENALIZE_FULL and action == 2:
+            if self.mode == Mode.PENALIZE_FULL and action == 2 and not self.avoid_penalty:
                 reward = -np.max(self.lmp_arr) * 0.1
 
             # do nothing if we cannot purchase more
@@ -271,9 +275,9 @@ class SimpleBatteryEnv(gym.Env):
                 self.num_buys -= 1
                 self.steps_since_last_sold = 0
         if self.mode == Mode.PENALIZE_WAIT:
-            if action == 1 and self.battery_storage > 0:
-                self.steps_since_last_sold = min(1+self.steps_since_last_soldn, 96)
-                reward = -np.max(self.lmp_arr) * 0.1 * self.steps_since_last_sold/96
+            if action == 1 and self.battery_storage > 0 and not self.avoid_penalty:
+                self.steps_since_last_sold = min(1+self.steps_since_last_sold, 96)
+                reward = -np.max(self.lmp_arr) * self.steps_since_last_sold/96
 
         observation = self._get_obs()
         info = self._get_info()
@@ -293,10 +297,10 @@ class SimpleBatteryEnv(gym.Env):
         # Choose the agent's battery level and starting time randomly
         # self.battery_storage = self.np_random.uniform(0, self.battery_capacity)
         self.battery_storage = 0
-        if self.mode == Mode.QLEARN or self.mode == Mode.DELAY:
-            self.num_buys = 0
-            self.bought_prices[:] = 0
-            self.bought_prices_pt = 0
+        self.num_buys = 0
+        self.bought_prices[:] = 0
+        self.bought_prices_pt = 0
+        self.steps_since_last_sold = 0
 
         if options is not None and options.get("rand_start", False):
             self.time_step = self.np_random.integers(0, len(self.lmp_arr), dtype=int)
@@ -304,7 +308,6 @@ class SimpleBatteryEnv(gym.Env):
             self.time_step = options.get("start", 0) % len(self.lmp_arr)
         else:
             self.time_step = 0
-        self.niters_since_last_charge = 0
 
         observation = self._get_obs()
         info = self._get_info()
