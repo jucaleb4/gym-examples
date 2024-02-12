@@ -14,6 +14,7 @@ class Mode(Enum):
     LONG_CHARGE = 2
     PENALIZE = 3
     DELAY = 4
+    QLEARN = 5
 
     # For Data
     REAL_DATA = 100
@@ -56,6 +57,8 @@ class SimpleBatteryEnv(gym.Env):
                 self.mode = Mode.PENALIZE
             elif key == "mode" and val == "delay":
                 self.mode = Mode.DELAY
+            elif key == "mode" and val == "qlearn":
+                self.mode = Mode.QLEARN
 
             if key == "data" and val == "periodic":
                 print("Switching to periodic dataset")
@@ -71,6 +74,9 @@ class SimpleBatteryEnv(gym.Env):
 
         # get data
         self.battery_storage = 0 # battery_capacity / 2
+        max_buys = 1
+        self.bought_prices = np.zeros(max_buys, dtype=float)
+        self.bought_prices_pt = 0
 
         # Internal clock and data for iterating through data
         self.time_step = 0
@@ -90,15 +96,9 @@ class SimpleBatteryEnv(gym.Env):
         self.window_size = 512  # The size of the PyGame window
 
         # --- Observations are tuple of 5 values: battery, LMP, demand, solar, wind, average cost ---
-        # Observations are tuple of 5 values: battery, LMP, historic LMP, average cost
-        # lows = np.append(0, np.min(self.lmp_arr)*np.ones(self.nhistory))
-        # highs = np.append(battery_capacity, np.max(self.lmp_arr)*np.ones(self.nhistory))
-        # vvv different lows and highs since we will be use sigmoig for past prices vvv
-        # lows = np.append(0, np.append(np.min(self.lmp_arr), np.zeros(self.nhistory-1)))
-        # highs = np.append(battery_capacity, np.append(np.max(self.lmp_arr), np.ones(self.nhistory-1)))
-        # vvv drop all lmp and soc vvv
-        lows = np.append(np.min(self.lmp_arr), np.zeros(self.nhistory-1))
-        highs = np.append(np.max(self.lmp_arr), np.ones(self.nhistory-1))
+        # Observations are tuple of 5 values: battery, current LMP, historic LMP
+        lows = np.append(0, np.min(self.lmp_arr)*np.ones(self.nhistory))
+        highs = np.append(battery_capacity, np.max(self.lmp_arr)*np.ones(self.nhistory))
         # self.avg_price = 0
 
         if self.mode == Mode.LONG_CHARGE:
@@ -114,12 +114,16 @@ class SimpleBatteryEnv(gym.Env):
             self.penalty_rate = -np.max(self.lmp_arr)/20
             self.num_consecutive_idle_steps = 0
         elif self.mode == Mode.DELAY:
-            # append number of buys and average price
-            self.max_buys = 12 # TODO: MAGIC NUMBER
+            # append number of buys and last LMP
+            self.max_buys = max_buys # TODO: MAGIC NUMBER
             self.num_buys = 0
-            self.avg_cost = 0.
-            # lows = np.append(lows, [0,np.min(self.lmp_arr)])
-            # highs = np.append(highs, [self.max_buys, np.max(self.lmp_arr)])
+            lows = np.append(lows, [0, np.min(self.lmp_arr)])
+            highs = np.append(highs, [self.max_buys, np.max(self.lmp_arr)])
+        elif self.mode == Mode.QLEARN:
+            self.max_buys = max_buys # TODO: MAGIC NUMBER
+            self.num_buys = 0
+            lows = np.zeros(self.nhistory-1)
+            highs = np.ones(self.nhistory-1)
 
         self.observation_space = spaces.Box(low=lows, high=highs, dtype=float)
 
@@ -152,7 +156,7 @@ class SimpleBatteryEnv(gym.Env):
             self.action_to_direction = {
                 0: -transfer_rate, # discharge (make money)
                 1: 0,              # do nothing
-                2: transfer_rate   # chrage (lose money)
+                2: transfer_rate   # charge (lose money)
             }
 
     # helper functions
@@ -161,21 +165,18 @@ class SimpleBatteryEnv(gym.Env):
         da_idx = self.time_step // 4 # day ahead (hourly) indexing
 
         obs = np.array([
-            # self.battery_storage, 
-            self.lmp_arr[rt_idx], 
+            self.battery_storage, 
+            # self.lmp_arr[rt_idx], 
             # self.demand_arr[da_idx],
             # self.solar_arr[da_idx],
             # self.wind_arr[da_idx],
         ])
 
-        # past `nhistory`-1
+        # past `nhistory`-1 (i.e., not including present)
         lmp_last = self.lmp_arr.take(np.arange(rt_idx-self.nhistory+1,rt_idx+1), mode="wrap")
-        # obs = np.append(obs, lmp_last[:-1:-1])
-
+        # reverse from most recent to oldest date
         lmp_last = lmp_last[::-1]
-        lmp_diff = np.diff(lmp_last)
-        lmp_diff_sigmoid = np.divide(1., 1. + np.exp(-lmp_diff))
-        obs = np.append(obs, lmp_diff_sigmoid)
+        obs = np.append(obs, lmp_last)
 
         # obs = np.append(obs, self.avg_price)
 
@@ -184,8 +185,11 @@ class SimpleBatteryEnv(gym.Env):
         if self.mode == Mode.PENALIZE:
             obs = np.append(obs, self.num_consecutive_idle_steps)
         if self.mode == Mode.DELAY:
-            pass
-            # obs = np.append(obs, [self.num_buys, self.avg_cost])
+            obs = np.append(obs, [self.num_buys, self.bought_prices[0]])
+        if self.mode == Mode.QLEARN:
+            lmp_diff = np.diff(lmp_last)
+            lmp_diff_sigmoid = np.divide(1., 1. + np.exp(-lmp_diff))
+            obs = lmp_diff_sigmoid
         
         return obs
 
@@ -193,20 +197,28 @@ class SimpleBatteryEnv(gym.Env):
         return {"time_step": self.time_step}
 
     def step(self, action):
+        # Adjust action based on constraints of system
         if self.mode == Mode.LONG_CHARGE and self.ncharges_left > 0:
             action = 2 # TODO: Magic number
 
-        if self.mode == Mode.DELAY: 
-            if (action == 2 and self.num_buys >= self.max_buys) or (action == 0 and self.num_buys <= 0):
+        max_charge = self.battery_storage >= self.battery_capacity
+        min_charge = self.battery_storage <= 0
+        if (action == 2 and max_charge) or (action == 0 and min_charge):
+            # do nothing if we cannot purchase more
+            action = 1
+
+        if self.mode == Mode.DELAY or self.mode == Mode.QLEARN: 
+            max_charge = self.num_buys >= self.max_buys
+            min_charge = self.num_buys <= 0
+            if (action == 2 and max_charge) or (action == 0 and min_charge):
                 # do nothing if we cannot purchase more
                 action = 1
 
-        # Get reward
+        # Get reward and update system
         transfer = self.action_to_direction[action]
         past_battery_storage = self.battery_storage
             
-    	# Update battery
-        self.battery_storage = np.clip( past_battery_storage + transfer, 0, self.battery_capacity-1)
+        self.battery_storage = np.clip( past_battery_storage + transfer, 0, self.battery_capacity)
         battery_change = self.battery_storage - past_battery_storage
         current_lmp = self.lmp_arr[self.time_step]
 
@@ -232,7 +244,6 @@ class SimpleBatteryEnv(gym.Env):
             else:
                 self.num_consecutive_idle_steps = 0 
 
-
         # Update state and variables
         self.time_step = (self.time_step + 1) % len(self.lmp_arr)
         if self.mode == Mode.LONG_CHARGE:
@@ -243,17 +254,21 @@ class SimpleBatteryEnv(gym.Env):
             else:
                 self.ncharges_left = max(0, self.ncharges_left-1)
 
-        if self.mode == Mode.DELAY:
+        if self.mode == Mode.DELAY or self.mode == Mode.QLEARN:
             # purchase
-            if action == 2: # TODO: magic number
-                nb = 1.*self.num_buys
-                self.avg_cost = (nb/(1.+nb))*self.avg_cost + 1./(1.+nb)*current_lmp
-                self.num_buys += 1
+            if action == 2 and battery_change > 0: # TODO: magic number
+                self.bought_prices[self.bought_prices_pt] = current_lmp
+                self.bought_prices_pt += 1
                 reward = 0
+                self.num_buys += 1
             # sell
             elif action == 0:
+                # treat self.bought_prices as queue
+                oldest_lmp = self.bought_prices[0]
+                self.bought_prices[0:self.bought_prices_pt-1] = self.bought_prices[1:self.bought_prices_pt]
+                self.bought_prices_pt -= 1
+                reward = (current_lmp - oldest_lmp) * abs(battery_change)
                 self.num_buys -= 1
-                reward = current_lmp - self.avg_cost
 
         observation = self._get_obs()
         info = self._get_info()
@@ -273,6 +288,11 @@ class SimpleBatteryEnv(gym.Env):
         # Choose the agent's battery level and starting time randomly
         # self.battery_storage = self.np_random.uniform(0, self.battery_capacity)
         self.battery_storage = 0
+        if self.mode == Mode.QLEARN or self.mode == Mode.DELAY:
+            self.num_buys = 0
+            self.bought_prices[:] = 0
+            self.bought_prices_pt = 0
+
         if options is not None and options.get("rand_start", False):
             self.time_step = self.np_random.integers(0, len(self.lmp_arr), dtype=int)
         elif options is not None:
