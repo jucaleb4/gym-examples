@@ -222,7 +222,7 @@ class SimpleBatteryEnv(gym.Env):
         if (action == 2 and max_charge) or (action == 0 and min_charge):
             # penalize if we tried to buy
             if self.mode == Mode.PENALIZE_FULL and action == 2 and not self.avoid_penalty:
-                reward = -np.max(self.lmp_arr) * 0.1
+                reward = -np.max(self.lmp_arr) * 0.01
 
             # do nothing if we cannot purchase more
             action = 1
