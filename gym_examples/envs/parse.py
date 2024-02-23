@@ -12,10 +12,9 @@ def get_caiso_data(print_data=False):
     root = "/storage/home/hcoda1/9/cju33/gym-examples/gym_examples/envs"
     root = "/Users/calebju/Code/github/gym-examples/gym_examples/envs"
     # TODO: The location of `Github` needs to be changed on ad-hoc basis
-    try:
-        root = os.path.join(os.path.expanduser("~"), "Github", "gym-examples/gym_examples/envs")
-    else:
-        root = os.path.join(os.path.expanduser("~"), "gym-examples/gym_examples/envs")
+    root = os.path.join(os.path.expanduser("~"), "gym-examples/gym_examples/envs")
+    if not os.path.exists(root):
+        root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
 
     lmp_fnames = ["20230601_20230701_PRC_RTPD_LMP_RTPD_20230927_12_19_12_v2.csv", "20230701_20230731_PRC_RTPD_LMP_RTPD_20230927_12_20_50_v2.csv", "20230731_20230830_PRC_RTPD_LMP_RTPD_20230927_12_23_20_v2.csv"]
     demand_fnames = ["20230601_20230701_SLD_FCST_DAM_20230927_12_29_00_v1.csv", "20230701_20230731_SLD_FCST_DAM_20230927_12_29_21_v1.csv", "20230731_20230830_SLD_FCST_DAM_20230927_12_29_39_v1.csv"]

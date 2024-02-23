@@ -7,9 +7,10 @@ import numpy as np
 class GridWorldEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=5):
-        self.size = size  # The size of the square grid
-        self.window_size = 512  # The size of the PyGame window
+    def __init__(self, render_mode=None, size=5, action_eps=0.):
+        self.action_eps = action_eps # probability fo doing random action
+        self.size = size       # The size of the square grid
+        self.window_size = 512 # The size of the PyGame window
 
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
@@ -81,6 +82,10 @@ class GridWorldEnv(gym.Env):
         return observation, info
 
     def step(self, action):
+        # Randomly perturb action
+        if self.np_random.random() <= self.action_eps:
+            action = self.np_random.integers(self.action_space.n)
+
         # Map the action (element of {0,1,2,3}) to the direction we walk in
         direction = self._action_to_direction[action]
         # We use `np.clip` to make sure we don't leave the grid
