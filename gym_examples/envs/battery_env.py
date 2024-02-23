@@ -25,7 +25,14 @@ class Mode(Enum):
 class SimpleBatteryEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, battery_capacity=400, transfer_rate=50, **kwargs):
+    def __init__(
+            self, 
+            render_mode=None, 
+            battery_capacity=400, 
+            transfer_rate=50, 
+            start_index=0,
+            end_index=-1,
+    **kwargs):
         """
         Constructor for simple battery env. We have three modes to describe state/action.
 
@@ -35,8 +42,10 @@ class SimpleBatteryEnv(gym.Env):
             - PENALIZE: Penalize (enlarge state space to keep track of last day we charged) with maximum of 20 days worth of no charging
             - DELAY: Delay penalty (enlarge by keeping number of assets and average cost)
 
-        :params battery_capacity: Battery capacity in MWh
-        :params transfer_rate: Battery transfer rate in 
+        :param battery_capacity: Battery capacity in MWh
+        :param transfer_rate: Battery transfer rate in 
+        :param start_index: starting point of data
+        :param end_index: ending point of data (-1 means we go until the end of data)
 
         Current default settings set to: Alamitos Energy Center
 
@@ -46,6 +55,10 @@ class SimpleBatteryEnv(gym.Env):
         human-mode. They will remain `None` until human-mode is used for the
         first time.
         """
+        assert transfer_rate <= battery_capacity, f"Transfer rate {transfer_rate} cannot exceed battery capcity {battery_capacity}"
+        assert 0 <= start_index, f"Invalid start index {start_index}"
+        assert end_index == -1 or start_index < end_index, f"Invalid end index {end_index} > start index {start_index}"
+
         # First get mode we want and other parameters
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
@@ -84,17 +97,14 @@ class SimpleBatteryEnv(gym.Env):
 
         # system variables
         self.battery_storage = 0 # battery_capacity / 2
-        self.num_buys = 0
-        self.max_buys = min(12, int(np.ceil(battery_capacity/transfer_rate)))
         self.steps_since_last_sold = 0
-        self.bought_prices = np.zeros(self.max_buys, dtype=float)
+        self.bought_prices = np.zeros(int(np.ceil(battery_capacity/transfer_rate)), dtype=float)
         self.bought_prices_pt = 0
         self.battery_capacity = battery_capacity 
         self.transfer_rate = transfer_rate
         self.window_size = 512  # The size of the PyGame window
 
         # get data
-        self.time_step = 0
         if self.data == Mode.REAL_DATA:
             lmp_arr, demand_arr, solar_arr, wind_arr = get_caiso_data()
             self.lmp_arr = lmp_arr
@@ -106,36 +116,36 @@ class SimpleBatteryEnv(gym.Env):
             ndata = 90 * 4 * 24
             self.lmp_arr = (hi-lo)/2 * (np.sin(np.arange(ndata) * 2 * np.pi/(4*24)) + 1) + (hi+lo)/2
 
+        self.start_index = min(start_index, len(self.lmp_arr)-1)
+        self.end_index = len(self.lmp_arr) if end_index == -1 else min(end_index, len(self.lmp_arr))
+        self.time_step = self.start_index
+
         # --- Observations are tuple of 5 values: battery, LMP, demand, solar, wind, average cost ---
         # Observations are tuple of 5 values: battery, current LMP, historic LMP
         lows = np.append(0, np.min(self.lmp_arr)*np.ones(self.nhistory))
         highs = np.append(battery_capacity, np.max(self.lmp_arr)*np.ones(self.nhistory))
-        # self.avg_price = 0
 
         if self.mode == Mode.LONG_CHARGE:
             lows = np.append(lows, 0)
             highs = np.append(highs, 2)
             self.ncharges_left = 0
         elif self.mode == Mode.PENALIZE:
-            # TODO: Added average cost of battery
-            # lows = np.append(lows, [0, np.min(self.lmp_arr)])
-            # highs = np.append(highs, [20, np.max(self.lmp_arr)])
             lows = np.append(lows, 0)
             highs = np.append(highs, 20)
             self.penalty_rate = -np.max(self.lmp_arr)/20
             self.num_consecutive_idle_steps = 0
         elif self.mode == Mode.DELAY or self.mode == Mode.PENALIZE_FULL:
             # append number of buys and last LMP
-            lows = np.append(lows, [0, min(0, np.min(self.lmp_arr))])
-            highs = np.append(highs, [self.max_buys, np.max(self.lmp_arr)])
+            lows = np.append(lows, [min(0, np.min(self.lmp_arr))])
+            highs = np.append(highs, [np.max(self.lmp_arr)])
         elif self.mode == Mode.QLEARN:
             lows = np.zeros(self.nhistory-1)
             highs = np.ones(self.nhistory-1)
         elif self.mode == Mode.PENALIZE_WAIT:
             # same Mode.PENALIZE_FULL with integer for distance to last sold if
             # battery not empty (penalize up to 1 day, 96 15m intervals)
-            lows = np.append(lows, [0, min(0, np.min(self.lmp_arr)), 0])
-            highs = np.append(highs, [self.max_buys, np.max(self.lmp_arr), 96])
+            lows = np.append(lows, [min(0, np.min(self.lmp_arr)), 0])
+            highs = np.append(highs, [np.max(self.lmp_arr), 96])
 
         self.observation_space = spaces.Box(low=lows, high=highs, dtype=float)
 
@@ -197,13 +207,13 @@ class SimpleBatteryEnv(gym.Env):
         if self.mode == Mode.PENALIZE:
             obs = np.append(obs, self.num_consecutive_idle_steps)
         if self.mode == Mode.DELAY or self.mode == Mode.PENALIZE_FULL:
-            obs = np.append(obs, [self.num_buys, self.bought_prices[0]])
+            obs = np.append(obs, self.bought_prices[0])
         if self.mode == Mode.QLEARN:
             lmp_diff = np.diff(lmp_last)
             lmp_diff_sigmoid = np.divide(1., 1. + np.exp(-lmp_diff))
             obs = lmp_diff_sigmoid
         if self.mode == Mode.PENALIZE_WAIT:
-            obs = np.append(obs, [self.num_buys, self.bought_prices[0], self.steps_since_last_sold])
+            obs = np.append(obs, [self.bought_prices[0], self.steps_since_last_sold])
 
         return obs
 
@@ -217,7 +227,7 @@ class SimpleBatteryEnv(gym.Env):
         if self.mode == Mode.LONG_CHARGE and self.ncharges_left > 0:
             action = 2 # TODO: Magic number
 
-        max_charge = self.battery_storage >= self.battery_capacity or self.num_buys == self.max_buys
+        max_charge = self.battery_storage >= self.battery_capacity 
         min_charge = self.battery_storage <= 0
         if (action == 2 and max_charge) or (action == 0 and min_charge):
             # penalize if we tried to buy
@@ -250,7 +260,10 @@ class SimpleBatteryEnv(gym.Env):
                 self.num_consecutive_idle_steps = 0 
 
         # Update state and variables
-        self.time_step = (self.time_step + 1) % len(self.lmp_arr)
+        self.time_step += 1
+        if self.time_step == self.end_index: # start the cycle again
+            self.time_step = self.start_index
+
         if self.mode == Mode.LONG_CHARGE:
             if action == 3: # TODO: Magic number
                 self.ncharges_left = 1
@@ -264,7 +277,6 @@ class SimpleBatteryEnv(gym.Env):
                 self.bought_prices[self.bought_prices_pt] = current_lmp
                 self.bought_prices_pt += 1
                 reward = 0
-                self.num_buys += 1
             # sell
             elif action == 0:
                 # treat self.bought_prices as queue
@@ -272,7 +284,6 @@ class SimpleBatteryEnv(gym.Env):
                 self.bought_prices[0:self.bought_prices_pt-1] = self.bought_prices[1:self.bought_prices_pt]
                 self.bought_prices_pt -= 1
                 reward = (current_lmp - oldest_lmp) * abs(battery_change)
-                self.num_buys -= 1
                 self.steps_since_last_sold = 0
         if self.mode == Mode.PENALIZE_WAIT:
             if action == 1 and self.battery_storage > 0 and not self.avoid_penalty:
@@ -297,17 +308,16 @@ class SimpleBatteryEnv(gym.Env):
         # Choose the agent's battery level and starting time randomly
         # self.battery_storage = self.np_random.uniform(0, self.battery_capacity)
         self.battery_storage = 0
-        self.num_buys = 0
         self.bought_prices[:] = 0
         self.bought_prices_pt = 0
         self.steps_since_last_sold = 0
 
         if options is not None and options.get("rand_start", False):
-            self.time_step = self.np_random.integers(0, len(self.lmp_arr), dtype=int)
+            self.time_step = self.np_random.integers(self.start_index, self.end_index, dtype=int)
         elif options is not None:
-            self.time_step = options.get("start", 0) % len(self.lmp_arr)
+            self.time_step = options.get("start", 0) % (self.end_index - self.start_index) + self.start_index
         else:
-            self.time_step = 0
+            self.time_step = self.start_index
 
         observation = self._get_obs()
         info = self._get_info()
