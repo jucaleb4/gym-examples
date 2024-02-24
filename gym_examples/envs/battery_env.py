@@ -32,7 +32,7 @@ class SimpleBatteryEnv(gym.Env):
             transfer_rate=50, 
             start_index=0,
             end_index=-1,
-    **kwargs):
+        **kwargs):
         """
         Constructor for simple battery env. We have three modes to describe state/action.
 
@@ -46,6 +46,7 @@ class SimpleBatteryEnv(gym.Env):
         :param transfer_rate: Battery transfer rate in 
         :param start_index: starting point of data
         :param end_index: ending point of data (-1 means we go until the end of data)
+        :param more_data: to include additional data, like DAM demand, solar, and wind
 
         Current default settings set to: Alamitos Energy Center
 
@@ -62,6 +63,7 @@ class SimpleBatteryEnv(gym.Env):
         # First get mode we want and other parameters
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
+        self.more_data = False
         self.nhistory = 10
         self.avoid_penalty = False
         for key, val in kwargs.items():
@@ -89,6 +91,10 @@ class SimpleBatteryEnv(gym.Env):
 
             elif key == "avoid_penalty":
                 self.avoid_penalty = bool(val)
+
+            elif key == "more_data":
+                self.more_data = True
+                print("gym-examples/gym-examples: Appending demand and rewewables forecast")
 
         self.window = None
         self.clock = None
@@ -125,6 +131,11 @@ class SimpleBatteryEnv(gym.Env):
         lows = np.append(0, np.min(self.lmp_arr)*np.ones(self.nhistory))
         highs = np.append(battery_capacity, np.max(self.lmp_arr)*np.ones(self.nhistory))
 
+        if self.more_data:
+            # append demand, solar, and wind
+            lows = np.append(lows, [np.min(self.demand_arr), np.min(solar_arr), np.min(wind_arr)])
+            highs= np.append(highs,[np.max(self.demand_arr), np.max(solar_arr), np.max(wind_arr)])
+
         if self.mode == Mode.LONG_CHARGE:
             lows = np.append(lows, 0)
             highs = np.append(highs, 2)
@@ -135,8 +146,10 @@ class SimpleBatteryEnv(gym.Env):
             self.penalty_rate = -np.max(self.lmp_arr)/20
             self.num_consecutive_idle_steps = 0
         elif self.mode == Mode.DELAY or self.mode == Mode.PENALIZE_FULL:
-            # append number of buys and last LMP
-            lows = np.append(lows, [min(0, np.min(self.lmp_arr))])
+            # append oldest LMP price LMP
+            # TODO: Can we delete below?
+            # lows = np.append(lows, [min(0, np.min(self.lmp_arr))])
+            lows = np.append(lows, [np.min(self.lmp_arr)])
             highs = np.append(highs, [np.max(self.lmp_arr)])
         elif self.mode == Mode.QLEARN:
             lows = np.zeros(self.nhistory-1)
@@ -186,13 +199,7 @@ class SimpleBatteryEnv(gym.Env):
         rt_idx = self.time_step # real time indexing
         da_idx = self.time_step // 4 # day ahead (hourly) indexing
 
-        obs = np.array([
-            self.battery_storage, 
-            # self.lmp_arr[rt_idx], 
-            # self.demand_arr[da_idx],
-            # self.solar_arr[da_idx],
-            # self.wind_arr[da_idx],
-        ])
+        obs = np.array([self.battery_storage])
 
         # past `nhistory`-1 (i.e., not including present)
         lmp_last = self.lmp_arr.take(np.arange(rt_idx-self.nhistory+1,rt_idx+1), mode="wrap")
@@ -200,7 +207,12 @@ class SimpleBatteryEnv(gym.Env):
         lmp_last = lmp_last[::-1]
         obs = np.append(obs, lmp_last)
 
-        # obs = np.append(obs, self.avg_price)
+        if self.more_data:
+            obs = np.append(obs, [
+                self.demand_arr[da_idx], 
+                self.solar_arr[da_idx], 
+                self.wind_arr[da_idx]
+            ])
 
         if self.mode == Mode.LONG_CHARGE:
             obs = np.append(obs, self.ncharges_left)
