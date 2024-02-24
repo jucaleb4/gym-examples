@@ -93,8 +93,9 @@ class SimpleBatteryEnv(gym.Env):
                 self.avoid_penalty = bool(val)
 
             elif key == "more_data":
-                self.more_data = True
-                print("gym-examples/gym-examples: Appending demand and rewewables forecast")
+                self.more_data = bool(val)
+                if self.more_data:
+                    print("gym-examples/gym-examples: Appending demand and rewewables forecast")
 
         self.window = None
         self.clock = None
