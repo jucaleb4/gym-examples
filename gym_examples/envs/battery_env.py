@@ -17,6 +17,7 @@ class Mode(Enum):
     QLEARN = 5
     PENALIZE_FULL = 6
     PENALIZE_WAIT = 7
+    DIFFERENCE = 8
 
     # For Data
     REAL_DATA = 100
@@ -64,7 +65,7 @@ class SimpleBatteryEnv(gym.Env):
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
         self.more_data = False
-        self.nhistory = 10
+        self.nhistory = 16
         self.avoid_penalty = False
         for key, val in kwargs.items():
             if key == "mode" and val == "fine_control":
@@ -81,6 +82,8 @@ class SimpleBatteryEnv(gym.Env):
                 self.mode = Mode.PENALIZE_FULL
             elif key == "mode" and val == "penalize_wait":
                 self.mode = Mode.PENALIZE_WAIT
+            elif key == "mode" and val == "difference":
+                self.mode = Mode.DIFFERENCE
 
             if key == "data" and val == "periodic":
                 print("Switching to periodic dataset")
@@ -96,6 +99,10 @@ class SimpleBatteryEnv(gym.Env):
                 self.more_data = bool(val)
                 if self.more_data:
                     print("gym-examples/gym-examples: Appending demand and rewewables forecast")
+
+        print(f"Running in mode {self.mode}")
+        print(f"Avoiding penalty: {self.avoid_penalty}")
+        self.nhistory_hour = int(self.nhistory/4)
 
         self.window = None
         self.clock = None
@@ -134,8 +141,9 @@ class SimpleBatteryEnv(gym.Env):
 
         if self.more_data:
             # append demand, solar, and wind
-            lows = np.append(lows, [np.min(self.demand_arr), np.min(solar_arr), np.min(wind_arr)])
-            highs= np.append(highs,[np.max(self.demand_arr), np.max(solar_arr), np.max(wind_arr)])
+            hour_ones = np.ones(self.nhistory_hour)
+            lows = np.append(lows, [np.min(self.demand_arr)*hour_ones, np.min(solar_arr)*hour_ones, np.min(wind_arr)*hour_ones])
+            highs= np.append(highs,[np.max(self.demand_arr)*hour_ones, np.max(solar_arr)*hour_ones, np.max(wind_arr)*hour_ones])
 
         if self.mode == Mode.LONG_CHARGE:
             lows = np.append(lows, 0)
@@ -160,7 +168,22 @@ class SimpleBatteryEnv(gym.Env):
             # battery not empty (penalize up to 1 day, 96 15m intervals)
             lows = np.append(lows, [min(0, np.min(self.lmp_arr)), 0])
             highs = np.append(highs, [np.max(self.lmp_arr), 96])
+        elif self.mode == Mode.DIFFERENCE:
+            lmp_diff = np.ptp(self.lmp_arr)
+            lows = np.append(0, -lmp_diff*np.ones(self.nhistory-1))
+            highs = np.append(battery_capacity, lmp_diff*np.ones(self.nhistory-1))
 
+            demand_diff = np.ptp(self.demand_arr)
+            solar_diff = np.ptp(self.solar_arr)
+            wind_diff = np.ptp(self.wind_arr)
+
+            if self.more_data:
+                hour_ones = np.ones(self.nhistory_hour-1)
+                lows = np.append(lows, [-demand_diff*hour_ones, -solar_diff*hour_ones, -wind_diff*hour_ones])
+                highs = np.append(highs, [demand_diff*hour_ones, solar_diff*hour_ones, wind_diff*hour_ones])
+
+        self.lows = lows
+        self.highs = highs
         self.observation_space = spaces.Box(low=lows, high=highs, dtype=float)
 
         if self.mode == Mode.FINE_CONTROL:
@@ -209,11 +232,10 @@ class SimpleBatteryEnv(gym.Env):
         obs = np.append(obs, lmp_last)
 
         if self.more_data:
-            obs = np.append(obs, [
-                self.demand_arr[da_idx], 
-                self.solar_arr[da_idx], 
-                self.wind_arr[da_idx]
-            ])
+            demand_last = self.demand_arr.take(np.arange(da_idx-self.nhistory_hour+1,da_idx+1), mode="wrap")
+            solar_last = self.solar_arr.take(np.arange(da_idx-self.nhistory_hour+1,da_idx+1), mode="wrap")
+            wind_last = self.wind_arr.take(np.arange(da_idx-self.nhistory_hour+1,da_idx+1), mode="wrap")
+            obs = np.append(obs, np.append(demand_last, np.append(solar_last, wind_last)))
 
         if self.mode == Mode.LONG_CHARGE:
             obs = np.append(obs, self.ncharges_left)
@@ -227,7 +249,17 @@ class SimpleBatteryEnv(gym.Env):
             obs = lmp_diff_sigmoid
         if self.mode == Mode.PENALIZE_WAIT:
             obs = np.append(obs, [self.bought_prices[0], self.steps_since_last_sold])
+        if self.mode == Mode.DIFFERENCE:
+            obs = np.array([self.battery_storage])
+            obs = np.append(obs, np.ediff1d(lmp_last))
 
+            if self.more_data:
+                obs = np.append(obs, np.append(
+                    np.ediff1d(demand_last), 
+                    np.append(np.ediff1d(solar_last), np.ediff1d(wind_last)))
+                )
+
+        assert len(obs) == len(self.lows)
         return obs
 
     def _get_info(self):
@@ -284,7 +316,9 @@ class SimpleBatteryEnv(gym.Env):
                 self.ncharges_left = 2
             else:
                 self.ncharges_left = max(0, self.ncharges_left-1)
-        if self.mode == Mode.DELAY or self.mode == Mode.QLEARN or self.mode == Mode.PENALIZE_FULL or self.mode == Mode.PENALIZE_WAIT:
+        if self.mode == Mode.DELAY or self.mode == Mode.QLEARN \
+            or self.mode == Mode.PENALIZE_FULL or \
+            self.mode == Mode.PENALIZE_WAIT or self.mode == Mode.DIFFERENCE:
             # purchase
             if action == 2: 
                 self.bought_prices[self.bought_prices_pt] = current_lmp
