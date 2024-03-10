@@ -12,12 +12,8 @@ class Mode(Enum):
     DEFAULT = 0
     FINE_CONTROL = 1
     LONG_CHARGE = 2
-    PENALIZE = 3
-    DELAY = 4
-    QLEARN = 5
-    PENALIZE_FULL = 6
-    PENALIZE_WAIT = 7
-    DIFFERENCE = 8
+    DIFFERENCE = 3
+    SIGMOID_DIFF = 4
 
     # For Data
     REAL_DATA = 100
@@ -33,15 +29,13 @@ class SimpleBatteryEnv(gym.Env):
             transfer_rate=50, 
             start_index=0,
             end_index=-1,
-        **kwargs):
+            **kwargs):
         """
         Constructor for simple battery env. We have three modes to describe state/action.
 
-            - DEFAULT: Normal on/off charging at 15 min interval
-            - FINE_CONTROL: More fine-grained charging
-            - LONG_CHARGE: Allowing chrage for 1-3 full days (enlarge state space to keep track of remaining charging days)
-            - PENALIZE: Penalize (enlarge state space to keep track of last day we charged) with maximum of 20 days worth of no charging
-            - DELAY: Delay penalty (enlarge by keeping number of assets and average cost)
+        Current default settings set to: Alamitos Energy Center.
+
+        The state space is represented as
 
         :param battery_capacity: Battery capacity in MWh
         :param transfer_rate: Battery transfer rate in 
@@ -49,7 +43,6 @@ class SimpleBatteryEnv(gym.Env):
         :param end_index: ending point of data (-1 means we go until the end of data)
         :param more_data: to include additional data, like DAM demand, solar, and wind
 
-        Current default settings set to: Alamitos Energy Center
 
         If human-rendering is used, `self.window` will be a reference
         to the window that we draw to. `self.clock` will be a clock that is used
@@ -61,64 +54,45 @@ class SimpleBatteryEnv(gym.Env):
         assert 0 <= start_index, f"Invalid start index {start_index}"
         assert end_index == -1 or start_index < end_index, f"Invalid end index {end_index} > start index {start_index}"
 
-        # First get mode we want and other parameters
+        self.transfer_rate = transfer_rate
+        self.battery_capacity = battery_capacity 
+        self.battery_storage = 0 
+        self.bought_prices = []
+        self.ncharges_left = 0
+        self.num_consecutive_idle_steps = 0
+
+        self.more_data = bool(kwargs.get("more_data", False))
+        self.nhistory = int(kwargs.get("nhistory", 16))
+        self.nhistory_hour = int(self.nhistory/4)
+        self.avoid_penalty = bool(kwargs.get("avoid_penalty", False))
+        self.delay_cost = bool(kwargs.get("delay_cost", False))
+        self.daily_cost = float(kwargs.get("daily_cost", 0))
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
-        self.more_data = False
-        self.nhistory = 16
-        self.avoid_penalty = False
         for key, val in kwargs.items():
             if key == "mode" and val == "fine_control":
                 self.mode = Mode.FINE_CONTROL
             elif key == "mode" and val == "long_charge":
                 self.mode = Mode.LONG_CHARGE
-            elif key == "mode" and val == "penalize":
-                self.mode = Mode.PENALIZE
-            elif key == "mode" and val == "delay":
-                self.mode = Mode.DELAY
-            elif key == "mode" and val == "qlearn":
-                self.mode = Mode.QLEARN
-            elif key == "mode" and val == "penalize_full":
-                self.mode = Mode.PENALIZE_FULL
-            elif key == "mode" and val == "penalize_wait":
-                self.mode = Mode.PENALIZE_WAIT
             elif key == "mode" and val == "difference":
                 self.mode = Mode.DIFFERENCE
-
-            if key == "data" and val == "periodic":
-                print("Switching to periodic dataset")
+            elif key == "mode" and val == "sigmoid":
+                self.mode = Mode.SIGMOID_DIFF
+            elif key == "data" and val == "periodic":
                 self.data = Mode.PERIODIC_DATA
 
-            elif key == "nhistory":
-                self.nhistory = int(val)
+        self.load_data()
+        self.penalty_rate = -np.max(self.lmp_arr)/20
+        self.setup_observation_space(start_index, end_index)
+        self.setup_action_space()
 
-            elif key == "avoid_penalty":
-                self.avoid_penalty = bool(val)
-
-            elif key == "more_data":
-                self.more_data = bool(val)
-                if self.more_data:
-                    print("gym-examples/gym-examples: Appending demand and rewewables forecast")
-
-        print(f"Running in mode {self.mode}")
-        print(f"Avoiding penalty: {self.avoid_penalty}")
-        self.nhistory_hour = int(self.nhistory/4)
-
+        self.window_size = 512  # The size of the PyGame window
         self.window = None
         self.clock = None
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
 
-        # system variables
-        self.battery_storage = 0 # battery_capacity / 2
-        self.steps_since_last_sold = 0
-        self.bought_prices = np.zeros(int(np.ceil(battery_capacity/transfer_rate)), dtype=float)
-        self.bought_prices_pt = 0
-        self.battery_capacity = battery_capacity 
-        self.transfer_rate = transfer_rate
-        self.window_size = 512  # The size of the PyGame window
-
-        # get data
+    def load_data(self):
         if self.data == Mode.REAL_DATA:
             lmp_arr, demand_arr, solar_arr, wind_arr = get_caiso_data()
             self.lmp_arr = lmp_arr
@@ -130,157 +104,156 @@ class SimpleBatteryEnv(gym.Env):
             ndata = 90 * 4 * 24
             self.lmp_arr = (hi-lo)/2 * (np.sin(np.arange(ndata) * 2 * np.pi/(4*24)) + 1) + (hi+lo)/2
 
+    def setup_observation_space(self, start_index, end_index):
+        """
+            - DEFAULT: Normal on/off charging at 15 min interval
+            - FINE_CONTROL: More fine-grained charging
+            - LONG_CHARGE: Allowing chrage for 1-3 full days (enlarge state space to keep track of remaining charging days)
+
+        The base state space consists of:
+            1. battery state of charge (SOC) (1)
+            2. current and past LMPs in chronologically decreasing order (nhistory)
+        If we want to include more information, we append the state space by
+            3. demands (floor(nhistory/4) - divide by 4 is demand is DA (1hr) while LMP is RT (15min))
+            4. solar (floor(nhistory/4))
+            5. wind (floor(nhistory/4))
+
+        If we use mode `difference` or `sigmoid_diff`, we show the LMP and
+        forecast differences between consecutive values. The former shows the
+        raw difference while the latter shows the difference with a sigmoid,
+        i.e., 1/(1+exp(-x)). We also normalize the SOC to be between [0,1],
+        and it is the fraction that the battery is full.
+        """
         self.start_index = min(start_index, len(self.lmp_arr)-1)
         self.end_index = len(self.lmp_arr) if end_index == -1 else min(end_index, len(self.lmp_arr))
         self.time_step = self.start_index
 
-        # --- Observations are tuple of 5 values: battery, LMP, demand, solar, wind, average cost ---
-        # Observations are tuple of 5 values: battery, current LMP, historic LMP
-        lows = np.append(0, np.min(self.lmp_arr)*np.ones(self.nhistory))
-        highs = np.append(battery_capacity, np.max(self.lmp_arr)*np.ones(self.nhistory))
-
+        lows = np.append(0, [np.min(self.lmp_arr)]*self.nhistory)
+        highs = np.append(self.battery_capacity, [np.max(self.lmp_arr)]*self.nhistory)
         if self.more_data:
-            # append demand, solar, and wind
-            hour_ones = np.ones(self.nhistory_hour)
-            lows = np.append(lows, [np.min(self.demand_arr)*hour_ones, np.min(solar_arr)*hour_ones, np.min(wind_arr)*hour_ones])
-            highs= np.append(highs,[np.max(self.demand_arr)*hour_ones, np.max(solar_arr)*hour_ones, np.max(wind_arr)*hour_ones])
-
+            lows = np.append(lows, 
+                [np.min(self.demand_arr)] * self.nhistory_hour
+                + [np.min(self.solar_arr)] * self.nhistory_hour
+                + [np.min(self.wind_arr)] * self.nhistory_hour
+            )
+            highs = np.append(highs, 
+                [np.max(self.demand_arr)] * self.nhistory_hour
+                + [np.max(self.solar_arr)] * self.nhistory_hour
+                + [np.max(self.wind_arr)] * self.nhistory_hour
+            )
         if self.mode == Mode.LONG_CHARGE:
             lows = np.append(lows, 0)
             highs = np.append(highs, 2)
-            self.ncharges_left = 0
-        elif self.mode == Mode.PENALIZE:
-            lows = np.append(lows, 0)
-            highs = np.append(highs, 20)
-            self.penalty_rate = -np.max(self.lmp_arr)/20
-            self.num_consecutive_idle_steps = 0
-        elif self.mode == Mode.DELAY or self.mode == Mode.PENALIZE_FULL:
-            # append oldest LMP price LMP
-            # TODO: Can we delete below?
-            # lows = np.append(lows, [min(0, np.min(self.lmp_arr))])
-            lows = np.append(lows, [np.min(self.lmp_arr)])
-            highs = np.append(highs, [np.max(self.lmp_arr)])
-        elif self.mode == Mode.QLEARN:
-            lows = np.zeros(self.nhistory-1)
-            highs = np.ones(self.nhistory-1)
-        elif self.mode == Mode.PENALIZE_WAIT:
-            # same Mode.PENALIZE_FULL with integer for distance to last sold if
-            # battery not empty (penalize up to 1 day, 96 15m intervals)
-            lows = np.append(lows, [min(0, np.min(self.lmp_arr)), 0])
-            highs = np.append(highs, [np.max(self.lmp_arr), 96])
         elif self.mode == Mode.DIFFERENCE:
-            lmp_diff = np.ptp(self.lmp_arr)
-            lows = np.append(0, -lmp_diff*np.ones(self.nhistory-1))
-            highs = np.append(battery_capacity, lmp_diff*np.ones(self.nhistory-1))
-
-            demand_diff = np.ptp(self.demand_arr)
-            solar_diff = np.ptp(self.solar_arr)
-            wind_diff = np.ptp(self.wind_arr)
-
+            highs = np.append(0, [np.ptp(self.lmp_arr)]*(self.nhistory-1))
             if self.more_data:
-                hour_ones = np.ones(self.nhistory_hour-1)
-                lows = np.append(lows, [-demand_diff*hour_ones, -solar_diff*hour_ones, -wind_diff*hour_ones])
-                highs = np.append(highs, [demand_diff*hour_ones, solar_diff*hour_ones, wind_diff*hour_ones])
+                highs = np.append(highs,
+                    [np.ptp(self.demand_arr)]*(self.nhistory_hour-1)
+                    + [np.ptp(self.solar_arr)]*(self.nhistory_hour-1)
+                    + [np.ptp(self.wind_arr)]*(self.nhistory_hour-1)
+                )
+            lows = -highs
+            highs[0] = self.battery_capacity
+        elif self.mode == Mode.SIGMOID_DIFF:
+            highs = np.ones(self.nhistory)
+            if self.more_data:
+                highs = np.append(highs, np.ones(3*(self.nhistory_hour-1)))
+            lows = 0 * highs
 
         self.lows = lows
         self.highs = highs
         self.observation_space = spaces.Box(low=lows, high=highs, dtype=float)
 
+    def setup_action_space(self):
         if self.mode == Mode.FINE_CONTROL:
             self.action_space = spaces.Discrete(11)
             self.action_to_direction = {
-                0: -transfer_rate,
-                1: -transfer_rate * 0.8,
-                2: -transfer_rate * 0.6,
-                3: -transfer_rate * 0.4,
-                4: -transfer_rate * 0.2,
+                0: -self.transfer_rate,
+                1: -self.transfer_rate * 0.8,
+                2: -self.transfer_rate * 0.6,
+                3: -self.transfer_rate * 0.4,
+                4: -self.transfer_rate * 0.2,
                 5: 0,
-                6: transfer_rate * 0.2,
-                7: transfer_rate * 0.4,
-                8: transfer_rate * 0.6,
-                9: transfer_rate * 0.8,
-                10: transfer_rate 
+                6: self.transfer_rate * 0.2,
+                7: self.transfer_rate * 0.4,
+                8: self.transfer_rate * 0.6,
+                9: self.transfer_rate * 0.8,
+                10: self.transfer_rate 
             }
         elif self.mode == Mode.LONG_CHARGE:
             self.action_space = spaces.Discrete(5)
             self.action_to_direction = {
                 0: -transfer_rate,
                 1: 0,
-                2: transfer_rate,
-                3: transfer_rate, # +1 day of charging
-                4: transfer_rate, # +2 days of charging
+                2: self.transfer_rate,
+                3: self.transfer_rate, # +1 day of charging
+                4: self.transfer_rate, # +2 days of charging
             }
         else:
             self.action_space = spaces.Discrete(3)
             self.action_to_direction = {
-                0: -transfer_rate, # discharge (make money)
+                0: -self.transfer_rate, # discharge (make money)
                 1: 0,              # do nothing
-                2: transfer_rate   # charge (lose money)
+                2: self.transfer_rate   # charge (lose money)
             }
 
-    # helper functions
     def _get_obs(self):
-        rt_idx = self.time_step # real time indexing
-        da_idx = self.time_step // 4 # day ahead (hourly) indexing
+        rt_idx = self.time_step 
+        da_idx = int(self.time_step/4) 
 
         obs = np.array([self.battery_storage])
-
-        # past `nhistory`-1 (i.e., not including present)
-        lmp_last = self.lmp_arr.take(np.arange(rt_idx-self.nhistory+1,rt_idx+1), mode="wrap")
-        # reverse from most recent to oldest date
-        lmp_last = lmp_last[::-1]
-        obs = np.append(obs, lmp_last)
+        recent_lmps = self.lmp_arr.take(
+            np.arange(rt_idx-self.nhistory+1,rt_idx+1), 
+            mode="wrap")[::-1]
+        obs = np.append(obs, recent_lmps)
 
         if self.more_data:
-            demand_last = self.demand_arr.take(np.arange(da_idx-self.nhistory_hour+1,da_idx+1), mode="wrap")
-            solar_last = self.solar_arr.take(np.arange(da_idx-self.nhistory_hour+1,da_idx+1), mode="wrap")
-            wind_last = self.wind_arr.take(np.arange(da_idx-self.nhistory_hour+1,da_idx+1), mode="wrap")
-            obs = np.append(obs, np.append(demand_last, np.append(solar_last, wind_last)))
+            recent_demand = self.demand_arr.take(
+                np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
+                mode="wrap")[::-1]
+            recent_solar = self.solar_arr.take(
+                np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
+                mode="wrap")[::-1]
+            recent_wind = self.wind_arr.take(
+                np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
+                mode="wrap")[::-1]
+            obs = np.append(obs, recent_demand) 
+            obs = np.append(obs, recent_solar) 
+            obs = np.append(obs, recent_wind)
 
         if self.mode == Mode.LONG_CHARGE:
             obs = np.append(obs, self.ncharges_left)
-        if self.mode == Mode.PENALIZE:
-            obs = np.append(obs, self.num_consecutive_idle_steps)
-        if self.mode == Mode.DELAY or self.mode == Mode.PENALIZE_FULL:
-            obs = np.append(obs, self.bought_prices[0])
-        if self.mode == Mode.QLEARN:
-            lmp_diff = np.diff(lmp_last)
-            lmp_diff_sigmoid = np.divide(1., 1. + np.exp(-lmp_diff))
-            obs = lmp_diff_sigmoid
-        if self.mode == Mode.PENALIZE_WAIT:
-            obs = np.append(obs, [self.bought_prices[0], self.steps_since_last_sold])
-        if self.mode == Mode.DIFFERENCE:
+        elif self.mode in [Mode.DIFFERENCE, Mode.SIGMOID_DIFF]:
             obs = np.array([self.battery_storage])
-            obs = np.append(obs, np.ediff1d(lmp_last))
-
+            obs = np.append(obs, np.ediff1d(recent_lmps))
             if self.more_data:
-                obs = np.append(obs, np.append(
-                    np.ediff1d(demand_last), 
-                    np.append(np.ediff1d(solar_last), np.ediff1d(wind_last)))
-                )
+                obs = np.append(obs, np.ediff1d(recent_demand))
+                obs = np.append(obs, np.ediff1d(recent_solar))
+                obs = np.append(obs, np.ediff1d(recent_wind))
+            if self.mode == Mode.SIGMOID_DIFF:
+                obs[0] /= self.battery_capacity
+                obs[1:] = np.divide(1., 1. + np.exp(-obs[1:]))
 
-        assert len(obs) == len(self.lows)
         return obs
 
     def _get_info(self):
         return {"time_step": self.time_step}
 
     def step(self, action):
-        reward = 0
-
-        # Adjust action based on constraints of system
+        # adjust action based on battery constraints 
         if self.mode == Mode.LONG_CHARGE and self.ncharges_left > 0:
-            action = 2 # TODO: Magic number
-
+            action = 2 
         max_charge = self.battery_storage >= self.battery_capacity 
         min_charge = self.battery_storage <= 0
         if (action == 2 and max_charge) or (action == 0 and min_charge):
-            # penalize if we tried to buy
-            if self.mode == Mode.PENALIZE_FULL and action == 2 and not self.avoid_penalty:
-                reward = -np.max(self.lmp_arr) * 0.01
-
-            # do nothing if we cannot purchase more
             action = 1
+        if self.mode == Mode.LONG_CHARGE:
+            if action == 3: # TODO: Magic number
+                self.ncharges_left = 1
+            elif action == 4: # TODO: Magic number
+                self.ncharges_left = 2
+            else:
+                self.ncharges_left = max(0, self.ncharges_left-1)
 
         # Update system variables
         transfer = self.action_to_direction[action]
@@ -289,53 +262,21 @@ class SimpleBatteryEnv(gym.Env):
         self.battery_storage = np.clip( past_battery_storage + transfer, 0, self.battery_capacity)
         battery_change = self.battery_storage - past_battery_storage
         current_lmp = self.lmp_arr[self.time_step]
-
-        if battery_change < 0: 
-            reward = current_lmp * battery_change
-        elif battery_change > 0: 
-            reward = current_lmp * (-battery_change)
-
-        if self.mode == Mode.PENALIZE: 
-            if battery_change == 0:
-                self.num_consecutive_idle_steps += 1
-
-                # TODO: Magic number: start penalizing after 3 consecutive days
-                reward = max(self.num_consecutive_idle_steps-2, 0) * self.penalty_rate
-            else:
-                self.num_consecutive_idle_steps = 0 
-
-        # Update state and variables
-        self.time_step += 1
-        if self.time_step == self.end_index: # start the cycle again
+        if self.time_step < self.end_index-1: 
+            self.time_step += 1
+        else:
             self.time_step = self.start_index
 
-        if self.mode == Mode.LONG_CHARGE:
-            if action == 3: # TODO: Magic number
-                self.ncharges_left = 1
-            elif action == 4: # TODO: Magic number
-                self.ncharges_left = 2
-            else:
-                self.ncharges_left = max(0, self.ncharges_left-1)
-        if self.mode == Mode.DELAY or self.mode == Mode.QLEARN \
-            or self.mode == Mode.PENALIZE_FULL or \
-            self.mode == Mode.PENALIZE_WAIT or self.mode == Mode.DIFFERENCE:
-            # purchase
+        reward = current_lmp * (-battery_change)
+        if self.delay_cost:
+            reward = 0
             if action == 2: 
-                self.bought_prices[self.bought_prices_pt] = current_lmp
-                self.bought_prices_pt += 1
-                reward = 0
-            # sell
+                self.bought_prices.append(current_lmp)
             elif action == 0:
-                # treat self.bought_prices as queue
-                oldest_lmp = self.bought_prices[0]
-                self.bought_prices[0:self.bought_prices_pt-1] = self.bought_prices[1:self.bought_prices_pt]
-                self.bought_prices_pt -= 1
-                reward = (current_lmp - oldest_lmp) * abs(battery_change)
-                self.steps_since_last_sold = 0
-        if self.mode == Mode.PENALIZE_WAIT:
-            if action == 1 and self.battery_storage > 0 and not self.avoid_penalty:
-                self.steps_since_last_sold = min(1+self.steps_since_last_sold, 96)
-                reward = -np.max(self.lmp_arr) * self.steps_since_last_sold/96
+                assert len(self.bought_prices) > 0, "Internal code error: cannot sell if bought_prices is empty for delay_cost setting"
+                oldest_bought_lmp = self.bought_prices.pop(0)
+                reward = (current_lmp - oldest_bought_lmp) * self.transfer_rate
+        reward -= self.daily_cost
 
         observation = self._get_obs()
         info = self._get_info()
@@ -352,13 +293,8 @@ class SimpleBatteryEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
-        # Choose the agent's battery level and starting time randomly
-        # self.battery_storage = self.np_random.uniform(0, self.battery_capacity)
         self.battery_storage = 0
-        self.bought_prices[:] = 0
-        self.bought_prices_pt = 0
-        self.steps_since_last_sold = 0
-
+        self.bought_prices = []
         if options is not None and options.get("rand_start", False):
             self.time_step = self.np_random.integers(self.start_index, self.end_index, dtype=int)
         elif options is not None:
@@ -371,10 +307,6 @@ class SimpleBatteryEnv(gym.Env):
 
         if self.render_mode == "human":
             self.render_frame()
-
-        if options is not None and options.get("s_0", None) is not None:
-            self.time_step = options["s_0"]
-            assert 0 <= self.time_step < len(self.lmp_arr), "Initial time step must be in [0, {len(self.lmp_arr)-1}]"
 
         return observation, info
 
