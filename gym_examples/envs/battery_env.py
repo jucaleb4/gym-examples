@@ -1,4 +1,7 @@
+import warnings
+
 import numpy as np
+import numpy.linalg as la
 # import pygame
 
 import gymnasium as gym
@@ -26,7 +29,7 @@ class SimpleBatteryEnv(gym.Env):
             self, 
             render_mode=None, 
             battery_capacity=400, 
-            transfer_rate=50, 
+            battery_power=100, 
             start_index=0,
             end_index=-1,
             **kwargs):
@@ -37,8 +40,8 @@ class SimpleBatteryEnv(gym.Env):
 
         The state space is represented as
 
-        :param battery_capacity: Battery capacity in MWh
-        :param transfer_rate: Battery transfer rate in 
+        :param battery_capacity: Battery capacity (MWh)
+        :param battery_power: Battery power or transfer rate (MW)
         :param start_index: starting point of data
         :param end_index: ending point of data (-1 means we go until the end of data)
         :param more_data: to include additional data, like DAM demand, solar, and wind
@@ -50,20 +53,23 @@ class SimpleBatteryEnv(gym.Env):
         human-mode. They will remain `None` until human-mode is used for the
         first time.
         """
-        assert transfer_rate <= battery_capacity, f"Transfer rate {transfer_rate} cannot exceed battery capcity {battery_capacity}"
         assert 0 <= start_index, f"Invalid start index {start_index}"
         assert end_index == -1 or start_index < end_index, f"Invalid end index {end_index} > start index {start_index}"
 
-        self.transfer_rate = transfer_rate
+        # "state" variables 
+        self.rt_scale = 0.25 # since we are operating every 15min
+        self.battery_power = battery_power
         self.battery_capacity = battery_capacity 
         self.battery_storage = 0 
-        self.bought_prices = []
-        self.ncharges_left = 0
-        self.num_consecutive_idle_steps = 0
+        self.avg_bought_lmp = 0 # unit: $/MWh
+        self.n_charges_left = 0   # for multi-period buying
+        self.num_consecutive_idle_steps = 0 
 
+        # below are settings for the environment
         self.more_data = bool(kwargs.get("more_data", False))
+        self.solar_coloc = bool(kwargs.get("solar_coloc", False))
         self.nhistory = int(kwargs.get("nhistory", 16))
-        self.nhistory_hour = int(self.nhistory/4)
+        self.nhistory_hour = max(1, int(self.nhistory/4))
         self.avoid_penalty = bool(kwargs.get("avoid_penalty", False))
         self.delay_cost = bool(kwargs.get("delay_cost", False))
         self.daily_cost = float(kwargs.get("daily_cost", 0))
@@ -94,11 +100,16 @@ class SimpleBatteryEnv(gym.Env):
 
     def load_data(self):
         if self.data == Mode.REAL_DATA:
-            lmp_arr, demand_arr, solar_arr, wind_arr = get_caiso_data()
+            lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = get_caiso_data()
             self.lmp_arr = lmp_arr
-            self.demand_arr = demand_arr * 1/4 # convert MW -> MWh (15 min interval)
+            self.demand_arr = demand_arr 
             self.solar_arr = solar_arr
             self.wind_arr = wind_arr
+            self.actual_solar_arr = wind_arr
+
+            # we scale down the solar power so that it matches the power of the battery
+            scale = min(1, self.battery_power/la.norm(self.actual_solar_arr, ord=np.inf))
+            self.actual_solar_arr = scale * self.actual_solar_arr
         elif self.data == Mode.PERIODIC_DATA:
             [lo, hi] = [-225, 725]
             ndata = 90 * 4 * 24
@@ -130,7 +141,11 @@ class SimpleBatteryEnv(gym.Env):
 
         lows = np.append(0, [np.min(self.lmp_arr)]*self.nhistory)
         highs = np.append(self.battery_capacity, [np.max(self.lmp_arr)]*self.nhistory)
+        self.lmp_obs_index = 1
         if self.more_data:
+            self.demand_obs_index = len(lows)
+            self.solar_obs_index = len(lows) + self.nhistory_hour
+            self.wind_obs_index = len(lows) + self.nhistory_hour
             lows = np.append(lows, 
                 [np.min(self.demand_arr)] * self.nhistory_hour
                 + [np.min(self.solar_arr)] * self.nhistory_hour
@@ -160,6 +175,12 @@ class SimpleBatteryEnv(gym.Env):
                 highs = np.append(highs, np.ones(3*(self.nhistory_hour-1)))
             lows = 0 * highs
 
+        if self.solar_coloc:
+            self.actual_solar_obs_index = len(lows)
+            self.max_actual_solar = np.max(self.actual_solar_arr)
+            highs = np.append(highs, [self.max_actual_solar]* self.nhistory_hour)
+            lows = np.append(lows, [np.min(self.actual_solar_arr)]* self.nhistory_hour)
+
         self.lows = lows
         self.highs = highs
         self.observation_space = spaces.Box(low=lows, high=highs, dtype=float)
@@ -168,34 +189,48 @@ class SimpleBatteryEnv(gym.Env):
         if self.mode == Mode.FINE_CONTROL:
             self.action_space = spaces.Discrete(11)
             self.action_to_direction = {
-                0: -self.transfer_rate,
-                1: -self.transfer_rate * 0.8,
-                2: -self.transfer_rate * 0.6,
-                3: -self.transfer_rate * 0.4,
-                4: -self.transfer_rate * 0.2,
+                0: -self.battery_power,
+                1: -self.battery_power * 0.8,
+                2: -self.battery_power * 0.6,
+                3: -self.battery_power * 0.4,
+                4: -self.battery_power * 0.2,
                 5: 0,
-                6: self.transfer_rate * 0.2,
-                7: self.transfer_rate * 0.4,
-                8: self.transfer_rate * 0.6,
-                9: self.transfer_rate * 0.8,
-                10: self.transfer_rate 
+                6: self.battery_power * 0.2,
+                7: self.battery_power * 0.4,
+                8: self.battery_power * 0.6,
+                9: self.battery_power * 0.8,
+                10: self.battery_power 
             }
         elif self.mode == Mode.LONG_CHARGE:
             self.action_space = spaces.Discrete(5)
             self.action_to_direction = {
-                0: -transfer_rate,
+                0: -self.battery_power,
                 1: 0,
-                2: self.transfer_rate,
-                3: self.transfer_rate, # +1 day of charging
-                4: self.transfer_rate, # +2 days of charging
+                2: self.battery_power,
+                3: self.battery_power, # +1 day of charging
+                4: self.battery_power, # +2 days of charging
             }
         else:
             self.action_space = spaces.Discrete(3)
             self.action_to_direction = {
-                0: -self.transfer_rate, # discharge (make money)
+                0: -self.battery_power, # discharge (make money)
                 1: 0,              # do nothing
-                2: self.transfer_rate   # charge (lose money)
+                2: self.battery_power   # charge (lose money)
             }
+        # 31 Mar, 2024: Constance said to not enlarge action space and use 
+        #               solar to augment our current decision (e.g., if sell,
+        #               then also sell solar)
+        # if self.solar_coloc:
+        #     if self.mode in [Mode.FINE_CONTROL, Mode.LONG_CHARGE]:
+        #         warnings.warn("Mode {self.mode} not supported with solar co-location, using default charging options")
+        #     self.action_space = spaces.Discrete(5)
+        #     self.action_to_direction = {
+        #         0: -self.battery_power, # discharge (make money)
+        #         1: 0,              # do nothing
+        #         2: self.battery_power,   # charge (lose money)
+        #         3: -self.battery_power,  # sell solar
+        #         4: self.battery_power,   # charge battery with solar
+        #     }
 
     def _get_obs(self):
         rt_idx = self.time_step 
@@ -221,8 +256,14 @@ class SimpleBatteryEnv(gym.Env):
             obs = np.append(obs, recent_solar) 
             obs = np.append(obs, recent_wind)
 
+        if self.solar_coloc:
+            recent_actual_solar = self.actual_solar_arr.take(
+                np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
+                mode="wrap")[::-1]
+            obs = np.append(obs, recent_actual_solar)
+
         if self.mode == Mode.LONG_CHARGE:
-            obs = np.append(obs, self.ncharges_left)
+            obs = np.append(obs, self.n_charges_left)
         elif self.mode in [Mode.DIFFERENCE, Mode.SIGMOID_DIFF]:
             obs = np.array([self.battery_storage])
             obs = np.append(obs, np.ediff1d(recent_lmps))
@@ -240,42 +281,74 @@ class SimpleBatteryEnv(gym.Env):
         return {"time_step": self.time_step}
 
     def step(self, action):
+        rt_idx = self.time_step 
+        da_idx = int(self.time_step/4) 
+
         # adjust action based on battery constraints 
-        if self.mode == Mode.LONG_CHARGE and self.ncharges_left > 0:
+        if self.mode == Mode.LONG_CHARGE and self.n_charges_left > 0:
             action = 2 
         max_charge = self.battery_storage >= self.battery_capacity 
         min_charge = self.battery_storage <= 0
-        if (action == 2 and max_charge) or (action == 0 and min_charge):
+        if (action in [2,4] and max_charge) or (action in [0,3] and min_charge):
             action = 1
         if self.mode == Mode.LONG_CHARGE:
             if action == 3: # TODO: Magic number
-                self.ncharges_left = 1
+                self.n_charges_left = 1
             elif action == 4: # TODO: Magic number
-                self.ncharges_left = 2
+                self.n_charges_left = 2
             else:
-                self.ncharges_left = max(0, self.ncharges_left-1)
+                self.n_charges_left = max(0, self.n_charges_left-1)
 
-        # Update system variables
-        transfer = self.action_to_direction[action]
-        past_battery_storage = self.battery_storage
-            
-        self.battery_storage = np.clip( past_battery_storage + transfer, 0, self.battery_capacity)
-        battery_change = self.battery_storage - past_battery_storage
-        current_lmp = self.lmp_arr[self.time_step]
+        # Finds power from grid (if applicable, solar) wrt battery capacity
+        charge_power = self.action_to_direction[action] # unit: MW
+        charge_dir = (1 if charge_power > 0 else -1)
+        if self.solar_coloc:
+            # solar charges in the same direction as action
+            solar_power = charge_dir * self.actual_solar_arr[da_idx] # unit: MW
+        else:
+            solar_power = 0
+
+        # charge
+        if charge_dir > 0:
+            max_charge = min(self.battery_capacity-self.battery_storage, 
+                             self.battery_power*self.rt_scale) # unit: MWh 
+            solar_energy = min(solar_power*self.rt_scale, max_charge)
+            energy_from_grid = min(charge_power*self.rt_scale, 
+                                   max_charge-solar_energy)
+            battery_charge = solar_energy + energy_from_grid
+            self.battery_storage += battery_charge
+            solar_surplus = solar_power*self.rt_scale - solar_energy
+        # discharge
+        else:
+            solar_energy = solar_power*self.rt_scale
+            battery_charge = max(-self.battery_storage, 
+                                  charge_power*self.rt_scale) # unit: MWh
+            energy_from_grid = battery_charge+solar_energy
+            self.battery_storage += battery_charge
+            solar_surplus = -solar_energy
+
+        curr_lmp = self.lmp_arr[rt_idx] # unit: $/MWh
         if self.time_step < self.end_index-1: 
             self.time_step += 1
         else:
             self.time_step = self.start_index
 
-        reward = current_lmp * (-battery_change)
+        reward = curr_lmp * solar_surplus
         if self.delay_cost:
-            reward = 0
-            if action == 2: 
-                self.bought_prices.append(current_lmp)
-            elif action == 0:
-                assert len(self.bought_prices) > 0, "Internal code error: cannot sell if bought_prices is empty for delay_cost setting"
-                oldest_bought_lmp = self.bought_prices.pop(0)
-                reward = (current_lmp - oldest_bought_lmp) * self.transfer_rate
+            if battery_charge > 0:
+                # fraction of energy from charging now
+                alpha = battery_charge/(self.battery_storage)
+                # fraction of energy bought from the grid
+                beta = energy_from_grid/battery_charge
+
+                self.avg_bought_lmp = (1.-alpha)*self.avg_bought_lmp + alpha*beta*curr_lmp # unit: $/MWh
+            else:
+                reward += (curr_lmp - self.avg_bought_lmp) * (-energy_from_grid)
+        else:
+            # assuming lmp>=0, discharge (or lose energy) yields profits 
+            reward += curr_lmp * (-energy_from_grid)
+
+        # every time step penalty (e.g., from investment costs)
         reward -= self.daily_cost
 
         observation = self._get_obs()
@@ -293,8 +366,7 @@ class SimpleBatteryEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
-        self.battery_storage = 0
-        self.bought_prices = []
+        self.avg_bought_lmp = 0
         if options is not None and options.get("rand_start", False):
             self.time_step = self.np_random.integers(self.start_index, self.end_index, dtype=int)
         elif options is not None:
