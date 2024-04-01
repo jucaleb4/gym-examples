@@ -8,6 +8,15 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 def get_caiso_data(print_data=False):
+    """
+    Parses and returns data for ____ during 06/30/2023-08/30/2023
+
+    :return lmp_arr: RT (every 15m) LMP (unit: $/MWh)
+    :return demand_arr: DA (every 1hr) demand power (unit: MW)
+    :return solar_arr: DA (every 1hr) solar power forecast (unit: MW)
+    :return wind_arr: DA (every 1hr) wind power forecast (unit: MW)
+    :return actual_solar_arr: DA (every 1 hr) actual solar (unit: MW)
+    """
  
     root = "/storage/home/hcoda1/9/cju33/gym-examples/gym_examples/envs"
     root = "/Users/calebju/Code/github/gym-examples/gym_examples/envs"
@@ -16,16 +25,35 @@ def get_caiso_data(print_data=False):
     if not os.path.exists(root):
         root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
 
-    lmp_fnames = ["20230601_20230701_PRC_RTPD_LMP_RTPD_20230927_12_19_12_v2.csv", "20230701_20230731_PRC_RTPD_LMP_RTPD_20230927_12_20_50_v2.csv", "20230731_20230830_PRC_RTPD_LMP_RTPD_20230927_12_23_20_v2.csv"]
-    demand_fnames = ["20230601_20230701_SLD_FCST_DAM_20230927_12_29_00_v1.csv", "20230701_20230731_SLD_FCST_DAM_20230927_12_29_21_v1.csv", "20230731_20230830_SLD_FCST_DAM_20230927_12_29_39_v1.csv"]
-    renew_fnames = ["20230601_20230701_SLD_REN_FCST_DAM_20230927_12_31_40_v1.csv", "20230701_20230731_SLD_REN_FCST_DAM_20230927_12_31_45_v1.csv", "20230731_20230830_SLD_REN_FCST_DAM_20230927_12_31_50_v1.csv"]
+    lmp_fnames = [
+        "20230601_20230701_PRC_RTPD_LMP_RTPD_20230927_12_19_12_v2.csv", 
+        "20230701_20230731_PRC_RTPD_LMP_RTPD_20230927_12_20_50_v2.csv", 
+        "20230731_20230830_PRC_RTPD_LMP_RTPD_20230927_12_23_20_v2.csv"
+    ]
+    demand_fnames = [
+        "20230601_20230701_SLD_FCST_DAM_20230927_12_29_00_v1.csv", 
+        "20230701_20230731_SLD_FCST_DAM_20230927_12_29_21_v1.csv", 
+        "20230731_20230830_SLD_FCST_DAM_20230927_12_29_39_v1.csv"
+    ]
+    renew_fnames = [
+        "20230601_20230701_SLD_REN_FCST_DAM_20230927_12_31_40_v1.csv", 
+        "20230701_20230731_SLD_REN_FCST_DAM_20230927_12_31_45_v1.csv", 
+        "20230731_20230830_SLD_REN_FCST_DAM_20230927_12_31_50_v1.csv"
+    ]
+    actual_renew_fnames = [
+        "20230601_20230701_SLD_REN_FCST_ACTUAL_20240310_20_16_16_v1.csv",
+        "20230701_20230801_SLD_REN_FCST_ACTUAL_20240310_20_16_55_v1.csv",
+        "20230801_20230901_SLD_REN_FCST_ACTUAL_20240310_20_20_59_v1.csv",
+    ]
     
     lmp_arr = np.array([], dtype=float)
     demand_arr = np.array([], dtype=float)
     solar_arr = np.array([], dtype=float)
     wind_arr = np.array([], dtype=float)
+    actual_solar_arr = np.array([], dtype=float)
     
-    for (lmp_fname, demand_fname, renew_fname) in zip(lmp_fnames, demand_fnames, renew_fnames):
+    for fnames in zip(lmp_fnames, demand_fnames, renew_fnames, actual_renew_fnames):
+        (lmp_fname, demand_fname, renew_fname, actual_renew_fname) = fnames
     
         # extract LMP @ MIL1_3_PASGNODE: only care about LMPs right now and sort by datetime
         df = pd.read_csv(f"{root}/{lmp_fname}")
@@ -61,6 +89,18 @@ def get_caiso_data(print_data=False):
     
         solar_arr = np.append(solar_arr, df_sol['MW'].values)
         wind_arr = np.append(wind_arr, df_wnd['MW'].values)
+
+        # extract actual rewnewable at SP15
+        df = pd.read_csv(f"{root}/{actual_renew_fname}")
+    
+        sol_idx = df.index[(df['RENEWABLE_TYPE'] == "Solar") & (df['TRADING_HUB'] == "SP15")].tolist()
+        wnd_idx = df.index[(df['RENEWABLE_TYPE'] == "Wind") & (df['TRADING_HUB'] == "SP15")].tolist()
+    
+        df_sol = df.iloc[sol_idx]
+        df_sol = df_sol.sort_values(by=['INTERVALSTARTTIME_GMT'])
+    
+        # TODO: Why is the length 719 rather than 720=24*30?
+        actual_solar_arr = np.append(actual_solar_arr, df_sol['MW'].values)
     
         if print_data:
             print(f"#lmps={len(lmp_arr)} #demands={len(demand_arr)} #solar={len(solar_arr)} #winds={len(wind_arr)}")
@@ -71,8 +111,8 @@ def get_caiso_data(print_data=False):
         print(f"Extrema demand: {np.min(demand_arr)}, {np.mean(demand_arr)}, {np.max(demand_arr)}")
         print(f"Extrema wind  : {np.min(wind_arr)}, {np.mean(wind_arr)}, {np.max(wind_arr)}")
         print(f"Extrema solar : {np.min(solar_arr)}, {np.mean(solar_arr)}, {np.max(solar_arr)}")
-    
-    return (lmp_arr, demand_arr, solar_arr, wind_arr)
+
+    return (lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr)
 
 def simple_visualization():
     lmp_arr, demand_arr, solar_arr, wind_arr = get_caiso_data()

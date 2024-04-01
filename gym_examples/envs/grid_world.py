@@ -73,6 +73,10 @@ class GridWorldEnv(gym.Env):
                 0, self.size, size=2, dtype=int
             )
 
+        if isinstance(options, dict) and "s_0" in options:
+            self_agent_location = options["s_0"][:2]
+            self_target_location = options["s_0"][2:]
+
         observation = self._get_obs()
         info = self._get_info()
 
@@ -82,6 +86,9 @@ class GridWorldEnv(gym.Env):
         return observation, info
 
     def step(self, action):
+        terminated_before_step = np.array_equal(self._agent_location, self._target_location)
+        reward = 1 if terminated_before_step else 0  # Binary sparse rewards
+
         # Randomly perturb action
         if self.np_random.random() <= self.action_eps:
             action = self.np_random.integers(self.action_space.n)
@@ -94,7 +101,6 @@ class GridWorldEnv(gym.Env):
         )
         # An episode is done iff the agent has reached the target
         terminated = np.array_equal(self._agent_location, self._target_location)
-        reward = 1 if terminated else 0  # Binary sparse rewards
         observation = self._get_obs()
         info = self._get_info()
 
