@@ -45,9 +45,8 @@ class TestBatteryEnv(unittest.TestCase):
     def test_start_with_empty_charge(self):
         env = self.get_battery_env(battery_capacity, battery_power)
         s, _ = env.reset()
-        battery_lvl = s[0]
 
-        self.assertEqual(battery_lvl, 0)
+        self.assertEqual(s["battery_soc"], 0)
 
     def test_buy_null_sell(self):
         env = self.get_battery_env(battery_capacity, battery_power)
@@ -56,13 +55,13 @@ class TestBatteryEnv(unittest.TestCase):
         s_2, r_2, _, _, _ = env.step(1) # null
         s_3, r_3, _, _, _ = env.step(0) # sell
 
-        self.assertEqual(s_0[0], 0)
-        self.assertEqual(s_1[0], rt_scale * battery_power)
-        self.assertEqual(s_2[0], rt_scale * battery_power)
-        self.assertEqual(s_3[0], 0)
-        self.assertEqual(r_1, -rt_scale * battery_power * s_0[1])
+        self.assertEqual(s_0["battery_soc"], 0)
+        self.assertEqual(s_1["battery_soc"], rt_scale * battery_power)
+        self.assertEqual(s_2["battery_soc"], rt_scale * battery_power)
+        self.assertEqual(s_3["battery_soc"], 0)
+        self.assertEqual(r_1, -rt_scale * battery_power * s_0["lmps"][0])
         self.assertEqual(r_2, 0)
-        self.assertEqual(r_3, rt_scale * battery_power * s_2[1])
+        self.assertEqual(r_3, rt_scale * battery_power * s_2["lmps"][0])
 
     def test_buy_full_and_sell_empty(self):
         env = self.get_battery_env(battery_capacity, battery_power)
@@ -76,11 +75,11 @@ class TestBatteryEnv(unittest.TestCase):
         # buy until full
         for i in range(int(battery_capacity/(rt_scale * battery_power))):
             s_i, r_i, _, _, _ = env.step(2) 
-            self.assertEqual(s_i[0], rt_scale * battery_power*(i+1))
-            self.assertEqual(r_i, -rt_scale * battery_power*s_i[2])
+            self.assertEqual(s_i["battery_soc"], rt_scale * battery_power*(i+1))
+            self.assertEqual(r_i, -rt_scale * battery_power*s_i["lmps"][1])
 
         s_full, r_full, _, _, _ = env.step(2)
-        self.assertEqual(s_full[0], battery_capacity)
+        self.assertEqual(s_full["battery_soc"], battery_capacity)
         self.assertEqual(r_full, 0)
 
     def test_delay_cost(self):
@@ -90,13 +89,13 @@ class TestBatteryEnv(unittest.TestCase):
         s_2, r_2, _, _, _ = env.step(1) 
         s_3, r_3, _, _, _ = env.step(0) 
 
-        self.assertEqual(s_0[0], 0)
-        self.assertEqual(s_1[0], rt_scale * battery_power)
-        self.assertEqual(s_2[0], rt_scale * battery_power)
-        self.assertEqual(s_3[0], 0)
+        self.assertEqual(s_0["battery_soc"], 0)
+        self.assertEqual(s_1["battery_soc"], rt_scale * battery_power)
+        self.assertEqual(s_2["battery_soc"], rt_scale * battery_power)
+        self.assertEqual(s_3["battery_soc"], 0)
         self.assertEqual(r_1, 0)
         self.assertEqual(r_2, 0)
-        self.assertEqual(r_3, rt_scale * battery_power*(s_2[1]-s_0[1]))
+        self.assertEqual(r_3, rt_scale * battery_power*(s_2["lmps"][0]-s_0["lmps"][0]))
 
     def test_daily_cost(self):
         env = self.get_battery_env(battery_capacity, battery_power, 
@@ -106,7 +105,7 @@ class TestBatteryEnv(unittest.TestCase):
         # buy
         for t in range(int(battery_capacity/battery_power)):
             s_i, r_i, _, _, _ = env.step(2)
-            self.assertEqual(r_i, -rt_scale * battery_power*s_i[2]-daily_cost)
+            self.assertEqual(r_i, -rt_scale * battery_power*s_i["lmps"][1]-daily_cost)
         # null
         for t in range(int(battery_capacity/battery_power)):
             s_i, r_i, _, _, _ = env.step(1)
@@ -114,7 +113,7 @@ class TestBatteryEnv(unittest.TestCase):
         # sell
         for t in range(int(battery_capacity/battery_power)):
             s_i, r_i, _, _, _ = env.step(0)
-            self.assertEqual(r_i, rt_scale*battery_power*s_i[2]-daily_cost)
+            self.assertEqual(r_i, rt_scale*battery_power*s_i["lmps"][1]-daily_cost)
 
     def test_daily_and_delay_cost(self):
         env = self.get_battery_env(
@@ -128,7 +127,7 @@ class TestBatteryEnv(unittest.TestCase):
         bought_lmps = []
         for t in range(int(battery_capacity/battery_power)):
             s_i, r_i, _, _, _ = env.step(2)
-            bought_lmps.append(s_i[2])
+            bought_lmps.append(s_i["lmps"][1])
             self.assertEqual(r_i, -daily_cost)
         # null
         for t in range(int(battery_capacity/battery_power)):
@@ -139,7 +138,7 @@ class TestBatteryEnv(unittest.TestCase):
         for t in range(int(battery_capacity/battery_power)):
             s_i, r_i, _, _, _ = env.step(0)
             # floating point error in mean 
-            self.assertAlmostEqual(r_i, rt_scale * battery_power*(s_i[2]-avg_bought_lmps)-daily_cost)
+            self.assertAlmostEqual(r_i, rt_scale * battery_power*(s_i["lmps"][1]-avg_bought_lmps)-daily_cost)
 
     def test_lmp_start_end_index_and_index_wrapping(self):
         pass
@@ -175,10 +174,10 @@ class TestBatteryEnv(unittest.TestCase):
         for t in range(100):
             s_diff_k, _, _, _, _ = diff_env.step(t%3)
 
-        self.assertEqual(s_0[0], s_diff_0[0])
-        self.assertEqual(s_k[0], s_diff_k[0])
-        self.assertTrue(np.allclose(np.ediff1d(s_0[1:1+nhistory]), s_diff_0[1:nhistory]))
-        self.assertTrue(np.allclose(np.ediff1d(s_k[1:1+nhistory]), s_diff_k[1:nhistory]))
+        self.assertEqual(s_0["battery_soc"], s_diff_0["battery_soc"])
+        self.assertEqual(s_k["battery_soc"], s_diff_k["battery_soc"])
+        self.assertTrue(np.allclose(np.ediff1d(s_0["lmps"]), s_diff_0["lmp_diffs"]))
+        self.assertTrue(np.allclose(np.ediff1d(s_k["lmps"]), s_diff_k["lmp_diffs"]))
 
         env.reset()
         diff_env.reset()
@@ -187,7 +186,7 @@ class TestBatteryEnv(unittest.TestCase):
         for t in range(int(battery_capacity/battery_power)):
             s_i, _, _, _, _ = env.step(2)
             _, r_i, _, _, _ = diff_env.step(2)
-            bought_lmps.append(s_i[2])
+            bought_lmps.append(s_i["lmps"][1])
             self.assertEqual(r_i, -daily_cost)
         # null
         for t in range(int(battery_capacity/battery_power)):
@@ -199,7 +198,7 @@ class TestBatteryEnv(unittest.TestCase):
         for t in range(int(battery_capacity/battery_power)):
             s_i, _, _, _, _ = env.step(0)
             _, r_i, _, _, _ = diff_env.step(0)
-            self.assertAlmostEqual(r_i, rt_scale*battery_power*(s_i[2]-avg_bought_lmps)-daily_cost)
+            self.assertAlmostEqual(r_i, rt_scale*battery_power*(s_i["lmps"][1]-avg_bought_lmps)-daily_cost)
 
     def test_sigmoid(self):
         nhistory=16
@@ -232,10 +231,10 @@ class TestBatteryEnv(unittest.TestCase):
             s_diff_k, _, _, _, _ = diff_env.step(t%3)
 
         sigmoid = lambda arr : np.reciprocal(1. + np.exp(-arr))
-        self.assertEqual(s_0[0], s_diff_0[0])
-        self.assertEqual(s_k[0], s_diff_k[0])
-        self.assertTrue(np.allclose(sigmoid(np.ediff1d(s_0[1:1+nhistory])), s_diff_0[1:nhistory]))
-        self.assertTrue(np.allclose(sigmoid(np.ediff1d(s_k[1:1+nhistory])), s_diff_k[1:nhistory]))
+        self.assertEqual(s_0["battery_soc"], s_diff_0["battery_soc"])
+        self.assertEqual(s_k["battery_soc"], s_diff_k["battery_soc"])
+        self.assertTrue(np.allclose(sigmoid(np.ediff1d(s_0["lmps"])), s_diff_0["lmp_diff_sigmoids"]))
+        self.assertTrue(np.allclose(sigmoid(np.ediff1d(s_k["lmps"])), s_diff_k["lmp_diff_sigmoids"]))
 
         env.reset()
         diff_env.reset()
@@ -244,7 +243,7 @@ class TestBatteryEnv(unittest.TestCase):
         for t in range(int(battery_capacity/battery_power)):
             s_i, _, _, _, _ = env.step(2)
             _, r_i, _, _, _ = diff_env.step(2)
-            bought_lmps.append(s_i[2])
+            bought_lmps.append(s_i["lmps"][1])
             self.assertEqual(r_i, -daily_cost)
         # null
         for t in range(int(battery_capacity/battery_power)):
@@ -256,7 +255,7 @@ class TestBatteryEnv(unittest.TestCase):
         for t in range(int(battery_capacity/battery_power)):
             s_i, _, _, _, _ = env.step(0)
             _, r_i, _, _, _ = diff_env.step(0)
-            self.assertAlmostEqual(r_i, rt_scale * battery_power*(s_i[2]-avg_bought_lmps)-daily_cost)
+            self.assertAlmostEqual(r_i, rt_scale * battery_power*(s_i["lmps"][1]-avg_bought_lmps)-daily_cost)
 
     def test_solar_coloc(self):
         """ 
@@ -290,56 +289,23 @@ class TestBatteryEnv(unittest.TestCase):
         s_2, r_2, _, _, _ = env.step(1) # null
         s_3, r_3, _, _, _ = env.step(0) # sell
 
-        self.assertEqual(s_0[0], 0)
+        self.assertEqual(s_0["battery_soc"], 0)
         # check battery storage is correct
         actual_battery_energy = rt_scale*battery_power
-        self.assertEqual(s_1[0], actual_battery_energy)
-        self.assertEqual(s_2[0], actual_battery_energy)
+        # avg LMP price = $LMP times ratio of energy from grid (not solar)
+        # Here, we access index 1 since index 0 is the current LMP (not the one
+        # we bought power at (in the previous step)
+        beta = (actual_battery_energy-rt_scale*s_1["solars"][0])/actual_battery_energy
+        avg_lmp_price = beta * s_1["lmps"][1]
+        self.assertEqual(s_1["battery_soc"], actual_battery_energy)
+        self.assertEqual(s_2["battery_soc"], actual_battery_energy)
         actual_battery_energy -= rt_scale*(battery_power)
-        self.assertEqual(s_3[0], actual_battery_energy)
+        self.assertEqual(s_3["battery_soc"], actual_battery_energy)
         self.assertEqual(r_1, -daily_cost)
-        # TODO: Actually calaculte this
-        """
-        """
-        self.assertAlmostEqual(r_2, 417.6419157072262)
-        self.assertAlmostEqual(r_3, 685.8515965228625)
-
-        # go through environment until we have 4 forecasted hours of solar
-        while 1:
-            s_0, _, _, _, _ = env.step(1) # null
-            if np.all(s_0[solar_idx:nhistory_hour] > 0):
-                break
-
-        # TODO: Fix this later
-        """
-        s_1, r_1, _, _, _ = env.step(4) # charge with solar
-        s_2, r_2, _, _, _ = env.step(2) # charge regularly
-        charge_energy_1 = s_1[0] - s_0[0]
-        charge_energy_2 = s_2[0] - s_1[0]
-
-        # test selling from solar (ensure the amount of energy sold correct)
-        s_3, r_3, _, _, _ = env.step(0) # sell normally
-        s_4, r_4, _, _, _ = env.step(3) # sell solar
-        s_5, r_5, _, _, _ = env.step(4) # sell normally
-        discharge_energy_1 = s_3[0] - s_2[0]
-        discharge_energy_2 = s_4[0] - s_3[0]
-        discharge_energy_3 = s_5[0] - s_4[0]
-
-        # start with empty battery
-        self.assertEqual(s_0[0], 0)
-
-        # test buying procedure from solar and regular
-        self.assertGreater(charge_energy_1, 0) # we charged
-        self.assertLess(charge_energy_1, battery_power) # we cannot charge more than transfer amount
-        self.assertAlmostEqual(charge_energy_2, battery_power)
-        self.assertEqual(r_1, -daily_cost)   
-        self.assertEqual(r_2, -daily_cost)
-
-        # test selling procedure
-        self.assertEqual(r_3, -daily_cost + charge_energy_1 * (s_3[1]-0)) # we gained money since initial charging was free
-        self.assertEqual(discharge_energy_1, -charge_energy_1)
-        self.assertGreater(r_4, -daily_cost) # free money from selling solar
-        self.assertEqual(discharge_energy_2, 0)
-        self.assertGreater(r_5, -daily_cost + battery_power * (s_5[1] - s_2[1])) # normal selling
-        self.assertEqual(discharge_energy_2, -charge_energy_2)
-        """
+        self.assertAlmostEqual(r_2, rt_scale * s_2["solars"][0]*s_2["lmps"][1]-daily_cost)
+        # profit is free solar and lmp price difference
+        self.assertAlmostEqual(r_3, 
+            rt_scale * s_3["solars"][0]*s_3["lmps"][1]
+            + (s_3["lmps"][1] - avg_lmp_price) * rt_scale * battery_power
+            - daily_cost
+        )

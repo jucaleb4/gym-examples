@@ -379,7 +379,6 @@ class SimpleBatteryEnv(gym.Env):
 
         # Finds power from grid (if applicable, solar) wrt battery capacity
         charge_power = self.action_to_direction[action] # unit: MW
-        charge_dir = (1 if charge_power > 0 else -1)
         if self.solar_coloc:
             # solar charges in the same direction as action
             solar_power = self.actual_solar_arr[da_idx] # unit: MW
@@ -387,7 +386,7 @@ class SimpleBatteryEnv(gym.Env):
             solar_power = 0
 
         # charge
-        if charge_dir > 0:
+        if charge_power > 0:
             max_charge = min(self.battery_capacity-self.battery_storage, 
                              self.battery_power*self.rt_scale) # unit: MWh 
             solar_energy = min(solar_power*self.rt_scale, max_charge)
@@ -397,7 +396,7 @@ class SimpleBatteryEnv(gym.Env):
             self.battery_storage += battery_charge
             solar_surplus = solar_power*self.rt_scale - solar_energy
         # discharge
-        else:
+        elif charge_power <= 0:
             solar_energy = solar_power*self.rt_scale
             # charge_power <= 0
             battery_charge = max(-self.battery_storage, 
@@ -415,7 +414,7 @@ class SimpleBatteryEnv(gym.Env):
         solar_reward = curr_lmp * solar_surplus
         grid_reward = 0
         if self.delay_cost:
-            if charge_dir > 0:
+            if charge_power > 0:
                 # fraction of energy from charging now
                 alpha = battery_charge/(self.battery_storage)
                 # fraction of energy bought from the grid
@@ -423,10 +422,10 @@ class SimpleBatteryEnv(gym.Env):
 
                 self.avg_bought_lmp = (1.-alpha)*self.avg_bought_lmp + alpha*beta*curr_lmp # unit: $/MWh
             else:
-                grid_reward = (curr_lmp - self.avg_bought_lmp) * (-energy_from_grid)
+                grid_reward = (curr_lmp - self.avg_bought_lmp) * (-battery_charge)
         else:
             # assuming lmp>=0, discharge (or lose energy) yields profits 
-            if charge_dir > 0:
+            if charge_power > 0:
                 grid_reward = (-energy_from_grid) * curr_lmp
             else:
                 grid_reward = (-battery_charge) * curr_lmp
