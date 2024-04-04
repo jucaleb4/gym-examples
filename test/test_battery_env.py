@@ -69,8 +69,8 @@ class TestBatteryEnv(unittest.TestCase):
         s_0, _ = env.reset()
         s_1, r_1, _, _, _ = env.step(0) 
 
-        self.assertEqual(s_0[0], 0)
-        self.assertEqual(s_1[0], 0)
+        self.assertEqual(s_0["battery_soc"], 0)
+        self.assertEqual(s_1["battery_soc"], 0)
         self.assertEqual(r_1, 0)
 
         # buy until full
@@ -299,6 +299,8 @@ class TestBatteryEnv(unittest.TestCase):
         self.assertEqual(s_3[0], actual_battery_energy)
         self.assertEqual(r_1, -daily_cost)
         # TODO: Actually calaculte this
+        """
+        """
         self.assertAlmostEqual(r_2, 417.6419157072262)
         self.assertAlmostEqual(r_3, 685.8515965228625)
 

@@ -1,5 +1,8 @@
 import warnings
 
+from collections import OrderedDict
+from enum import Enum
+
 import numpy as np
 import numpy.linalg as la
 # import pygame
@@ -7,8 +10,6 @@ import numpy.linalg as la
 import gymnasium as gym
 from gymnasium import spaces
 from gym_examples.envs.parse import get_caiso_data
-
-from enum import Enum
 
 class Mode(Enum):
     # For action types
@@ -60,8 +61,8 @@ class SimpleBatteryEnv(gym.Env):
         self.rt_scale = 0.25 # since we are operating every 15min
         self.battery_power = battery_power
         self.battery_capacity = battery_capacity 
-        self.battery_storage = 0 
-        self.avg_bought_lmp = 0 # unit: $/MWh
+        self.battery_storage = 0.
+        self.avg_bought_lmp = 0. # unit: $/MWh
         self.n_charges_left = 0   # for multi-period buying
         self.num_consecutive_idle_steps = 0 
 
@@ -135,17 +136,22 @@ class SimpleBatteryEnv(gym.Env):
         i.e., 1/(1+exp(-x)). We also normalize the SOC to be between [0,1],
         and it is the fraction that the battery is full.
         """
+        # this will be used to construct the Dict observation space
+        dt = OrderedDict()
+
         self.start_index = min(start_index, len(self.lmp_arr)-1)
         self.end_index = len(self.lmp_arr) if end_index == -1 else min(end_index, len(self.lmp_arr))
         self.time_step = self.start_index
 
         lows = np.append(0, [np.min(self.lmp_arr)]*self.nhistory)
         highs = np.append(self.battery_capacity, [np.max(self.lmp_arr)]*self.nhistory)
-        self.lmp_obs_index = 1
+        dt["battery_soc"] = spaces.Box(low=0, high=self.battery_capacity)
+        dt["lmps"] = spaces.Box(
+            low=np.min(self.lmp_arr), 
+            high=np.max(self.lmp_arr), 
+            shape=(self.nhistory,),
+        )
         if self.more_data:
-            self.demand_obs_index = len(lows)
-            self.solar_obs_index = len(lows) + self.nhistory_hour
-            self.wind_obs_index = len(lows) + self.nhistory_hour
             lows = np.append(lows, 
                 [np.min(self.demand_arr)] * self.nhistory_hour
                 + [np.min(self.solar_arr)] * self.nhistory_hour
@@ -156,34 +162,75 @@ class SimpleBatteryEnv(gym.Env):
                 + [np.max(self.solar_arr)] * self.nhistory_hour
                 + [np.max(self.wind_arr)] * self.nhistory_hour
             )
+            dt["demand_fcsts"] = spaces.Box(low=np.min(self.demand_arr), high=np.max(self.demand_arr), shape=(self.nhistory,))
+            dt["solar_fcsts"] = spaces.Box(low=np.min(self.solar_arr), high=np.max(self.solar_arr), shape=(self.nhistory,))
+            dt["wind_fcsts"] = spaces.Box(low=np.min(self.wind_arr), high=np.max(self.wind_arr), shape=(self.nhistory,))
         if self.mode == Mode.LONG_CHARGE:
             lows = np.append(lows, 0)
             highs = np.append(highs, 2)
+            dt["remaining_charges"] = spaces.Box(low=0, high=2, shape=())
         elif self.mode == Mode.DIFFERENCE:
             highs = np.append(0, [np.ptp(self.lmp_arr)]*(self.nhistory-1))
+            lows = -highs
+            highs[0] = self.battery_capacity
+            dt = OrderedDict([
+                ("battery_soc", spaces.Box(low=0, high=self.battery_capacity)),
+                ("lmp_diffs", spaces.Box(
+                    low=-np.ptp(self.lmp_arr), 
+                    high=np.ptp(self.lmp_arr), 
+                    shape=(self.nhistory-1,)
+                )),
+            ])
+
             if self.more_data:
                 highs = np.append(highs,
                     [np.ptp(self.demand_arr)]*(self.nhistory_hour-1)
                     + [np.ptp(self.solar_arr)]*(self.nhistory_hour-1)
                     + [np.ptp(self.wind_arr)]*(self.nhistory_hour-1)
                 )
-            lows = -highs
-            highs[0] = self.battery_capacity
+                dt["demand_fcst_diffs"] = spaces.Box(
+                    low=-np.ptp(self.demand_arr), 
+                    high=np.ptp(self.demand_arr), 
+                    shape=(self.nhistory-1,)
+                )
+                dt["solar_fcst_diffs"] = spaces.Box(
+                    low=-np.ptp(self.solar_arr), 
+                    high=np.ptp(self.solar_arr), 
+                    shape=(self.nhistory-1,)
+                )
+                dt["wind_fcst_diffs"] = spaces.Box(
+                    low=-np.ptp(self.wind_arr), 
+                    high=np.ptp(self.wind_arr), 
+                    shape=(self.nhistory-1,)
+                )
+
         elif self.mode == Mode.SIGMOID_DIFF:
             highs = np.ones(self.nhistory)
-            if self.more_data:
-                highs = np.append(highs, np.ones(3*(self.nhistory_hour-1)))
             lows = 0 * highs
+            dt = OrderedDict([
+                ("battery_soc", spaces.Box(low=0, high=1, shape=())),
+                ("lmp_diff_sigmoids", spaces.Box(low=0, high=1, shape=(self.nhistory,))),
+            ])
+            if self.more_data:
+                dt["demand_fcst_diff_sigmoids"] = spaces.Box(low=0, high=1, shape=(self.nhistory_hour-1,))
+                dt["solar_fcst_diff_sigmoids"] = spaces.Box(low=0, high=1, shape=(self.nhistory_hour-1,))
+                dt["wind_fcst_diff_sigmoids"] = spaces.Box(low=0, high=1, shape=(self.nhistory_hour-1,))
 
         if self.solar_coloc:
             self.actual_solar_obs_index = len(lows)
-            self.max_actual_solar = np.max(self.actual_solar_arr)
-            highs = np.append(highs, [self.max_actual_solar]* self.nhistory_hour)
+            highs = np.append(highs, [np.max(self.actual_solar_arr)] * self.nhistory_hour)
             lows = np.append(lows, [np.min(self.actual_solar_arr)]* self.nhistory_hour)
 
-        self.lows = lows
-        self.highs = highs
-        self.observation_space = spaces.Box(low=lows, high=highs, dtype=float)
+            dt["solars"] = spaces.Box(
+                low=np.min(self.actual_solar_arr), 
+                high=np.max(self.actual_solar_arr), 
+                shape=(self.nhistory_hour,)
+            )
+
+        # self.lows = lows
+        # self.highs = highs
+        # self.observation_space = spaces.spaces.Box(low=lows, high=highs, dtype=float)
+        self.observation_space = spaces.Dict(dt)
 
     def setup_action_space(self):
         if self.mode == Mode.FINE_CONTROL:
@@ -236,11 +283,13 @@ class SimpleBatteryEnv(gym.Env):
         rt_idx = self.time_step 
         da_idx = int(self.time_step/4) 
 
-        obs = np.array([self.battery_storage])
         recent_lmps = self.lmp_arr.take(
             np.arange(rt_idx-self.nhistory+1,rt_idx+1), 
             mode="wrap")[::-1]
-        obs = np.append(obs, recent_lmps)
+        obs = OrderedDict([
+            ("battery_soc", np.array([self.battery_storage])),
+            ("lmps", recent_lmps), 
+        ])
 
         if self.more_data:
             recent_demand = self.demand_arr.take(
@@ -252,33 +301,62 @@ class SimpleBatteryEnv(gym.Env):
             recent_wind = self.wind_arr.take(
                 np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
                 mode="wrap")[::-1]
-            obs = np.append(obs, recent_demand) 
-            obs = np.append(obs, recent_solar) 
-            obs = np.append(obs, recent_wind)
+            # obs = np.append(obs, recent_demand) 
+            # obs = np.append(obs, recent_solar) 
+            # obs = np.append(obs, recent_wind)
+
+            obs["demand_fcsts"] = recent_demand
+            obs["solar_fcsts"] = recent_solar
+            obs["wind_fcsts"] = recent_wind
+
+        if self.mode == Mode.LONG_CHARGE:
+            # obs = np.append(obs, self.n_charges_left)
+            obs["remaining_charges"] = self.n_charges_left
+        elif self.mode in [Mode.DIFFERENCE, Mode.SIGMOID_DIFF]:
+            # obs = np.array([self.battery_storage])
+            obs = OrderedDict([("battery_soc", np.array([self.battery_storage]))])
+            # obs = np.append(obs, np.ediff1d(recent_lmps))
+            obs["lmp_diffs"] = np.ediff1d(recent_lmps)
+
+            if self.more_data:
+                # obs = np.append(obs, np.ediff1d(recent_demand))
+                # obs = np.append(obs, np.ediff1d(recent_solar))
+                # obs = np.append(obs, np.ediff1d(recent_wind))
+                obs["demand_fcst_diffs"] = np.ediff1d(recent_demand)
+                obs["solar_fcst_diffs"] = np.ediff1d(recent_solar)
+                obs["wind_fcst_diffs"] = np.ediff1d(recent_wind)
+
+                if self.mode == Mode.SIGMOID_DIFF:
+                    # obs[0] /= self.battery_capacity
+                    # obs[1:] = np.divide(1., 1. + np.exp(-obs[1:]))
+                    obs["battery_soc"] /= self.battery_capacity
+                    obs["lmp_diff_sigmoids"] = np.divide(1., 1+np.exp(-obs["lmp_diffs"]))
+                    obs["demand_fcst_diff_sigmoids"] = np.divide(1., 1+np.exp(-obs["demand_fcst_diffs"]))
+                    obs["solar_fcst_diff_sigmoids"] = np.divide(1., 1+np.exp(-obs["solar_fcst_diffs"]))
+                    obs["wind_fcst_diff_sigmoids"] = np.divide(1., 1+np.exp(-obs["wind_fcst_diffs"]))
+
+                    del obs["lmp_diffs"]
+                    del obs["demand_fcst_diffs"]
+                    del obs["solar_fcst_diffs"]
+                    del obs["wind_fcst_diffs"]
 
         if self.solar_coloc:
             recent_actual_solar = self.actual_solar_arr.take(
                 np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
                 mode="wrap")[::-1]
-            obs = np.append(obs, recent_actual_solar)
-
-        if self.mode == Mode.LONG_CHARGE:
-            obs = np.append(obs, self.n_charges_left)
-        elif self.mode in [Mode.DIFFERENCE, Mode.SIGMOID_DIFF]:
-            obs = np.array([self.battery_storage])
-            obs = np.append(obs, np.ediff1d(recent_lmps))
-            if self.more_data:
-                obs = np.append(obs, np.ediff1d(recent_demand))
-                obs = np.append(obs, np.ediff1d(recent_solar))
-                obs = np.append(obs, np.ediff1d(recent_wind))
-            if self.mode == Mode.SIGMOID_DIFF:
-                obs[0] /= self.battery_capacity
-                obs[1:] = np.divide(1., 1. + np.exp(-obs[1:]))
+            # obs = np.append(obs, recent_actual_solar)
+            obs["solars"] = recent_actual_solar
 
         return obs
 
-    def _get_info(self):
-        return {"time_step": self.time_step}
+    def _get_info(self, solar_reward=0, grid_reward=0):
+        return {
+            "time_step": self.time_step,
+            "solar_reward": solar_reward,
+            "grid_reward": grid_reward,
+            "soc": self.battery_storage,
+            "curr_lmp": self.lmp_arr[self.time_step],
+        }
 
     def step(self, action):
         rt_idx = self.time_step 
@@ -304,7 +382,7 @@ class SimpleBatteryEnv(gym.Env):
         charge_dir = (1 if charge_power > 0 else -1)
         if self.solar_coloc:
             # solar charges in the same direction as action
-            solar_power = charge_dir * self.actual_solar_arr[da_idx] # unit: MW
+            solar_power = self.actual_solar_arr[da_idx] # unit: MW
         else:
             solar_power = 0
 
@@ -321,11 +399,12 @@ class SimpleBatteryEnv(gym.Env):
         # discharge
         else:
             solar_energy = solar_power*self.rt_scale
+            # charge_power <= 0
             battery_charge = max(-self.battery_storage, 
                                   charge_power*self.rt_scale) # unit: MWh
-            energy_from_grid = battery_charge+solar_energy
+            energy_from_grid = battery_charge-solar_energy
             self.battery_storage += battery_charge
-            solar_surplus = -solar_energy
+            solar_surplus = solar_energy
 
         curr_lmp = self.lmp_arr[rt_idx] # unit: $/MWh
         if self.time_step < self.end_index-1: 
@@ -333,9 +412,10 @@ class SimpleBatteryEnv(gym.Env):
         else:
             self.time_step = self.start_index
 
-        reward = curr_lmp * solar_surplus
+        solar_reward = curr_lmp * solar_surplus
+        grid_reward = 0
         if self.delay_cost:
-            if battery_charge > 0:
+            if charge_dir > 0:
                 # fraction of energy from charging now
                 alpha = battery_charge/(self.battery_storage)
                 # fraction of energy bought from the grid
@@ -343,16 +423,20 @@ class SimpleBatteryEnv(gym.Env):
 
                 self.avg_bought_lmp = (1.-alpha)*self.avg_bought_lmp + alpha*beta*curr_lmp # unit: $/MWh
             else:
-                reward += (curr_lmp - self.avg_bought_lmp) * (-energy_from_grid)
+                grid_reward = (curr_lmp - self.avg_bought_lmp) * (-energy_from_grid)
         else:
             # assuming lmp>=0, discharge (or lose energy) yields profits 
-            reward += curr_lmp * (-energy_from_grid)
+            if charge_dir > 0:
+                grid_reward = (-energy_from_grid) * curr_lmp
+            else:
+                grid_reward = (-battery_charge) * curr_lmp
 
         # every time step penalty (e.g., from investment costs)
+        reward = solar_reward + grid_reward
         reward -= self.daily_cost
 
         observation = self._get_obs()
-        info = self._get_info()
+        info = self._get_info(solar_reward, grid_reward)
 
         if self.render_mode == "human":
             self.render_frame()
