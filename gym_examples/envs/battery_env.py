@@ -69,6 +69,7 @@ class SimpleBatteryEnv(gym.Env):
         # below are settings for the environment
         self.more_data = bool(kwargs.get("more_data", False))
         self.solar_coloc = bool(kwargs.get("solar_coloc", False))
+        self.solar_scale = kwargs.get("solar_scale", 0.)
         self.nhistory = int(kwargs.get("nhistory", 16))
         self.nhistory_hour = max(1, int(self.nhistory/4))
         self.avoid_penalty = bool(kwargs.get("avoid_penalty", False))
@@ -109,7 +110,7 @@ class SimpleBatteryEnv(gym.Env):
             self.actual_solar_arr = wind_arr
 
             # we scale down the solar power so that it matches 10% of battery charging
-            scale = 0.1 * min(1, self.battery_power/la.norm(self.actual_solar_arr, ord=np.inf))
+            scale = self.solar_scale * min(1, self.battery_power/la.norm(self.actual_solar_arr, ord=np.inf))
             self.actual_solar_arr = scale * self.actual_solar_arr
         elif self.data == Mode.PERIODIC_DATA:
             [lo, hi] = [-225, 725]
