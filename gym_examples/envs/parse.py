@@ -22,6 +22,7 @@ def get_caiso_data(print_data=False):
     root = "/Users/calebju/Code/github/gym-examples/gym_examples/envs"
     # TODO: The location of `Github` needs to be changed on ad-hoc basis
     root = os.path.join(os.path.expanduser("~"), "gym-examples/gym_examples/envs")
+    root = os.path.dirname(os.path.abspath(__file__))
     if not os.path.exists(root):
         root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
 
