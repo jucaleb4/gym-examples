@@ -42,11 +42,21 @@ class TestBatteryEnv(unittest.TestCase):
         )
         return env
 
-    def test_start_with_empty_charge(self):
+    def test_reset(self):
         env = self.get_battery_env(battery_capacity, battery_power)
-        s, _ = env.reset()
+        s_0, _ = env.reset()
 
-        self.assertEqual(s["battery_soc"], 0)
+        self.assertEqual(s_0["battery_soc"], 0)
+
+        s_1, _, _, _, _ = env.step(2) # buy
+        s_2, _, _, _, _ = env.step(2) # buy
+
+        self.assertGreater(s_1["battery_soc"], 0)
+        self.assertGreater(s_2["battery_soc"], 0)
+
+        s_4, _ = env.reset()
+        self.assertEqual(s_4["battery_soc"], 0)
+        self.assertTrue(np.all(s_0["lmps"] == s_4["lmps"]))
 
     def test_buy_null_sell(self):
         env = self.get_battery_env(battery_capacity, battery_power)

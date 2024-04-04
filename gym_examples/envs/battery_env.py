@@ -329,7 +329,7 @@ class SimpleBatteryEnv(gym.Env):
                 if self.mode == Mode.SIGMOID_DIFF:
                     # obs[0] /= self.battery_capacity
                     # obs[1:] = np.divide(1., 1. + np.exp(-obs[1:]))
-                    obs["battery_soc"] /= self.battery_capacity
+                    obs["battery_soc"] = np.divide(obs["battery_soc"], self.battery_capacity)
                     obs["lmp_diff_sigmoids"] = np.divide(1., 1+np.exp(-obs["lmp_diffs"]))
                     obs["demand_fcst_diff_sigmoids"] = np.divide(1., 1+np.exp(-obs["demand_fcst_diffs"]))
                     obs["solar_fcst_diff_sigmoids"] = np.divide(1., 1+np.exp(-obs["solar_fcst_diffs"]))
@@ -449,6 +449,7 @@ class SimpleBatteryEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
+        self.battery_storage = 0
         self.avg_bought_lmp = 0
         if options is not None and options.get("rand_start", False):
             self.time_step = self.np_random.integers(self.start_index, self.end_index, dtype=int)
