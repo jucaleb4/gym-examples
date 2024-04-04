@@ -163,9 +163,9 @@ class SimpleBatteryEnv(gym.Env):
                 + [np.max(self.solar_arr)] * self.nhistory_hour
                 + [np.max(self.wind_arr)] * self.nhistory_hour
             )
-            dt["demand_fcsts"] = spaces.Box(low=np.min(self.demand_arr), high=np.max(self.demand_arr), shape=(self.nhistory,))
-            dt["solar_fcsts"] = spaces.Box(low=np.min(self.solar_arr), high=np.max(self.solar_arr), shape=(self.nhistory,))
-            dt["wind_fcsts"] = spaces.Box(low=np.min(self.wind_arr), high=np.max(self.wind_arr), shape=(self.nhistory,))
+            dt["demand_fcsts"] = spaces.Box(low=np.min(self.demand_arr), high=np.max(self.demand_arr), shape=(self.nhistory_hour,))
+            dt["solar_fcsts"] = spaces.Box(low=np.min(self.solar_arr), high=np.max(self.solar_arr), shape=(self.nhistory_hour,))
+            dt["wind_fcsts"] = spaces.Box(low=np.min(self.wind_arr), high=np.max(self.wind_arr), shape=(self.nhistory_hour,))
         if self.mode == Mode.LONG_CHARGE:
             lows = np.append(lows, 0)
             highs = np.append(highs, 2)
@@ -192,17 +192,17 @@ class SimpleBatteryEnv(gym.Env):
                 dt["demand_fcst_diffs"] = spaces.Box(
                     low=-np.ptp(self.demand_arr), 
                     high=np.ptp(self.demand_arr), 
-                    shape=(self.nhistory-1,)
+                    shape=(self.nhistory_hour-1,)
                 )
                 dt["solar_fcst_diffs"] = spaces.Box(
                     low=-np.ptp(self.solar_arr), 
                     high=np.ptp(self.solar_arr), 
-                    shape=(self.nhistory-1,)
+                    shape=(self.nhistory_hour-1,)
                 )
                 dt["wind_fcst_diffs"] = spaces.Box(
                     low=-np.ptp(self.wind_arr), 
                     high=np.ptp(self.wind_arr), 
-                    shape=(self.nhistory-1,)
+                    shape=(self.nhistory_hour-1,)
                 )
 
         elif self.mode == Mode.SIGMOID_DIFF:
