@@ -7,7 +7,7 @@ import numpy as np
 class GridWorldEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=5, action_eps=0.):
+    def __init__(self, render_mode=None, size=10, action_eps=0.):
         self.action_eps = action_eps # probability fo doing random action
         self.size = size       # The size of the square grid
         self.window_size = 512 # The size of the PyGame window
@@ -87,13 +87,17 @@ class GridWorldEnv(gym.Env):
 
     def step(self, action):
         terminated_before_step = np.array_equal(self._agent_location, self._target_location)
-        reward = 1 if terminated_before_step else 0  # Binary sparse rewards
+        reward = 0 if terminated_before_step else -1  # Binary sparse rewards
 
         # Randomly perturb action
         if self.np_random.random() <= self.action_eps:
             action = self.np_random.integers(self.action_space.n)
 
         # Map the action (element of {0,1,2,3}) to the direction we walk in
+        # but 5% chance we randomly move
+        if self.np_random.random() <= 0.05:
+            action = self.action_space.sample()
+
         direction = self._action_to_direction[action]
         # We use `np.clip` to make sure we don't leave the grid
         self._agent_location = np.clip(
