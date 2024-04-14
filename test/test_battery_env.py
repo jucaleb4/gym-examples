@@ -5,7 +5,7 @@ import gymnasium as gym
 import gym_examples 
 
 battery_capacity = 400
-battery_power = 50
+battery_power = 100
 daily_cost = 200
 rt_scale = 0.25 # since we buy at 15min increments and LMP is in MWh
 
@@ -20,6 +20,7 @@ class TestBatteryEnv(unittest.TestCase):
             more_data=False,
             delay_cost=False,
             solar_coloc=False,
+            solar_scale=0.0,
             daily_cost=0,
             start_index=0,
             end_index=-1
@@ -37,8 +38,9 @@ class TestBatteryEnv(unittest.TestCase):
             delay_cost=delay_cost,
             daily_cost=daily_cost,
             solar_coloc=solar_coloc,
+            solar_scale=solar_scale,
             start_index=start_index,
-            end_index=end_index
+            end_index=end_index,
         )
         return env
 
@@ -278,6 +280,8 @@ class TestBatteryEnv(unittest.TestCase):
         solar_idx = 1+nhistory+nhistory_hour
         # location of actual solar
         actual_solar_idx = 1+nhistory+3*nhistory_hour
+        # create random amount of solar
+        solar_scale = 0.5*np.random.random()
 
         env = self.get_battery_env(
             battery_capacity, 
@@ -287,7 +291,23 @@ class TestBatteryEnv(unittest.TestCase):
             more_data=True,
             nhistory=nhistory,
             solar_coloc=True,
-            mode="default"
+            solar_scale=solar_scale,
+            mode="default",
+            start_index=4*24*(90-14), # peak of solar occurs at this time, where we want to get surplus solar
+            end_index=-1
+        )
+        env_2 = self.get_battery_env(
+            battery_capacity, 
+            battery_power, 
+            delay_cost=True, 
+            daily_cost=daily_cost,
+            more_data=True,
+            nhistory=nhistory,
+            solar_coloc=True,
+            solar_scale=2*solar_scale,
+            mode="default",
+            start_index=4*24*(90-14), # peak of solar occurs at this time, where we want to get surplus solar
+            end_index=-1
         )
 
         self.assertEqual(env.action_space.n, 3)
@@ -295,9 +315,21 @@ class TestBatteryEnv(unittest.TestCase):
         # test buy, sell, null still work (daily cost is penalty to encourage
         # battery use, e.g., investment cost of battery divided over lifetime
         s_0, _ = env.reset()
+        s2_0, _ = env_2.reset()
+
+        # reset until we have some solar
+        for _ in range(4*6):
+            env.step(1)
+            env_2.step(1)
+
         s_1, r_1, _, _, _ = env.step(2) # buy
         s_2, r_2, _, _, _ = env.step(1) # null
         s_3, r_3, _, _, _ = env.step(0) # sell
+
+        # copy with second environment that has higher solar
+        s2_1, r2_1, _, _, _ = env_2.step(2) # buy
+        s2_2, r2_2, _, _, _ = env_2.step(1) # null
+        s2_3, r2_3, _, _, _ = env_2.step(0) # sell
 
         self.assertEqual(s_0["battery_soc"], 0)
         # check battery storage is correct
@@ -305,13 +337,15 @@ class TestBatteryEnv(unittest.TestCase):
         # avg LMP price = $LMP times ratio of energy from grid (not solar)
         # Here, we access index 1 since index 0 is the current LMP (not the one
         # we bought power at (in the previous step)
-        beta = (actual_battery_energy-rt_scale*s_1["solars"][0])/actual_battery_energy
+        beta = max(0, actual_battery_energy-rt_scale*s_1["solars"][0])/actual_battery_energy
+        solar_surplus = max(0, rt_scale*s_1["solars"][0]-actual_battery_energy)
         avg_lmp_price = beta * s_1["lmps"][1]
+        profit_from_extra_solar = solar_surplus * s_1["lmps"][1]
         self.assertEqual(s_1["battery_soc"], actual_battery_energy)
         self.assertEqual(s_2["battery_soc"], actual_battery_energy)
         actual_battery_energy -= rt_scale*(battery_power)
         self.assertEqual(s_3["battery_soc"], actual_battery_energy)
-        self.assertEqual(r_1, -daily_cost)
+        self.assertEqual(r_1, -daily_cost + profit_from_extra_solar)
         self.assertAlmostEqual(r_2, rt_scale * s_2["solars"][0]*s_2["lmps"][1]-daily_cost)
         # profit is free solar and lmp price difference
         self.assertAlmostEqual(r_3, 
@@ -319,3 +353,94 @@ class TestBatteryEnv(unittest.TestCase):
             + (s_3["lmps"][1] - avg_lmp_price) * rt_scale * battery_power
             - daily_cost
         )
+
+        # ensures that more solar means larger profits
+        self.assertAlmostEqual(r2_2 - r_2, rt_scale * s_2["solars"][0]*s_2["lmps"][1])
+
+    def test_solar_coloc_wo_delay(self):
+        """ 
+        Solar co-location but without delay
+        """
+        nhistory=16
+        # indices
+        nhistory_hour = 4
+        # location of solar forecast
+        solar_idx = 1+nhistory+nhistory_hour
+        # location of actual solar
+        actual_solar_idx = 1+nhistory+3*nhistory_hour
+        # create random amount of solar
+        solar_scale = 0.5*np.random.random()
+
+        env = self.get_battery_env(
+            battery_capacity, 
+            battery_power, 
+            delay_cost=False, 
+            daily_cost=daily_cost,
+            more_data=True,
+            nhistory=nhistory,
+            solar_coloc=True,
+            solar_scale=solar_scale,
+            mode="default",
+            start_index=4*24*(90-14), # peak of solar occurs at this time, where we want to get surplus solar
+            end_index=-1
+        )
+        env_2 = self.get_battery_env(
+            battery_capacity, 
+            battery_power, 
+            delay_cost=False, 
+            daily_cost=daily_cost,
+            more_data=True,
+            nhistory=nhistory,
+            solar_coloc=True,
+            solar_scale=2*solar_scale,
+            mode="default",
+            start_index=4*24*(90-14), # peak of solar occurs at this time, where we want to get surplus solar
+            end_index=-1
+        )
+
+        self.assertEqual(env.action_space.n, 3)
+
+        # test buy, sell, null still work (daily cost is penalty to encourage
+        # battery use, e.g., investment cost of battery divided over lifetime
+        s_0, _ = env.reset()
+        s2_0, _ = env_2.reset()
+
+        # reset until we have some solar
+        for _ in range(4*6):
+            env.step(1)
+            env_2.step(1)
+
+        s_1, r_1, _, _, _ = env.step(2) # buy
+        s_2, r_2, _, _, _ = env.step(1) # null
+        s_3, r_3, _, _, _ = env.step(0) # sell
+
+        # copy with second environment that has higher solar
+        s2_1, r2_1, _, _, _ = env_2.step(2) # buy
+        s2_2, r2_2, _, _, _ = env_2.step(1) # null
+        s2_3, r2_3, _, _, _ = env_2.step(0) # sell
+
+        self.assertEqual(s_0["battery_soc"], 0)
+        # check battery storage is correct
+        actual_battery_energy = rt_scale*battery_power
+        # avg LMP price = $LMP times ratio of energy from grid (not solar)
+        # Here, we access index 1 since index 0 is the current LMP (not the one
+        # we bought power at (in the previous step)
+        beta = max(0, actual_battery_energy-rt_scale*s_1["solars"][0])/actual_battery_energy
+        solar_surplus = max(0, rt_scale*s_1["solars"][0]-actual_battery_energy)
+        avg_lmp_price = beta * s_1["lmps"][1]
+        profit_from_extra_solar = solar_surplus * s_1["lmps"][1]
+        self.assertEqual(s_1["battery_soc"], actual_battery_energy)
+        self.assertEqual(s_2["battery_soc"], actual_battery_energy)
+        actual_battery_energy -= rt_scale*(battery_power)
+        self.assertEqual(s_3["battery_soc"], actual_battery_energy)
+        self.assertAlmostEqual(r_1, -daily_cost + profit_from_extra_solar - avg_lmp_price * rt_scale * battery_power)
+        self.assertAlmostEqual(r_2, rt_scale * s_2["solars"][0]*s_2["lmps"][1]-daily_cost)
+        # profit is free solar and lmp price difference
+        self.assertAlmostEqual(r_3, 
+            rt_scale * s_3["solars"][0]*s_3["lmps"][1]
+            + (s_3["lmps"][1]) * rt_scale * battery_power
+            - daily_cost
+        )
+
+        # ensures that more solar means larger profits
+        self.assertAlmostEqual(r2_2 - r_2, rt_scale * s_2["solars"][0]*s_2["lmps"][1])

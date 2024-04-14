@@ -107,11 +107,12 @@ class SimpleBatteryEnv(gym.Env):
             self.demand_arr = demand_arr 
             self.solar_arr = solar_arr
             self.wind_arr = wind_arr
-            self.actual_solar_arr = wind_arr
+            self.actual_solar_arr = actual_solar_arr
 
             # we scale down the solar power so that it matches 10% of battery charging
             scale = self.solar_scale * min(1, self.battery_power/la.norm(self.actual_solar_arr, ord=np.inf))
-            self.actual_solar_arr = scale * self.actual_solar_arr
+            # small values are not too small, so we zero out
+            self.actual_solar_arr = scale * np.maximum(0, self.actual_solar_arr)
         elif self.data == Mode.PERIODIC_DATA:
             [lo, hi] = [-225, 725]
             ndata = 90 * 4 * 24
