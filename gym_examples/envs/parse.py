@@ -2,12 +2,22 @@
 This file parses through the files to gather data.
 """
 import os
+import glob
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def get_caiso_data(print_data=False):
+def get_fname_from_wildcard(wildcard_fname: str):
+    fnames = glob.glob(wildcard_fname)
+    if len(fnames) != 1:
+        raise Exception("Expected one file for wildcard %s, got %i" % (
+            wildcard_fname, 
+            len(fnames)
+        ))
+    return fnames[0]
+
+def get_caiso_data(node_id, print_data=False):
     """
     Parses and returns data for ____ during 06/30/2023-08/30/2023
 
@@ -18,46 +28,60 @@ def get_caiso_data(print_data=False):
     :return actual_solar_arr: DA (every 1 hr) actual solar (unit: MW)
     """
  
-    root = "/storage/home/hcoda1/9/cju33/gym-examples/gym_examples/envs"
-    root = "/Users/calebju/Code/github/gym-examples/gym_examples/envs"
+    # root = "/storage/home/hcoda1/9/cju33/gym-examples/gym_examples/envs"
+    # root = "/Users/calebju/Code/github/gym-examples/gym_examples/envs"
     # TODO: The location of `Github` needs to be changed on ad-hoc basis
-    root = os.path.join(os.path.expanduser("~"), "gym-examples/gym_examples/envs")
+    # root = os.path.join(os.path.expanduser("~"), "gym-examples", "gym_examples", "envs", node_id)
     root = os.path.dirname(os.path.abspath(__file__))
     if not os.path.exists(root):
-        root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
+        raise Exception("Cannot find the root path %s" % root)
+        # root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
 
-    lmp_fnames = [
-        "20230601_20230701_PRC_RTPD_LMP_RTPD_20230927_12_19_12_v2.csv", 
-        "20230701_20230731_PRC_RTPD_LMP_RTPD_20230927_12_20_50_v2.csv", 
-        "20230731_20230830_PRC_RTPD_LMP_RTPD_20230927_12_23_20_v2.csv"
-    ]
-    demand_fnames = [
-        "20230601_20230701_SLD_FCST_DAM_20230927_12_29_00_v1.csv", 
-        "20230701_20230731_SLD_FCST_DAM_20230927_12_29_21_v1.csv", 
-        "20230731_20230830_SLD_FCST_DAM_20230927_12_29_39_v1.csv"
-    ]
-    renew_fnames = [
-        "20230601_20230701_SLD_REN_FCST_DAM_20230927_12_31_40_v1.csv", 
-        "20230701_20230731_SLD_REN_FCST_DAM_20230927_12_31_45_v1.csv", 
-        "20230731_20230830_SLD_REN_FCST_DAM_20230927_12_31_50_v1.csv"
-    ]
-    actual_renew_fnames = [
-        "20230601_20230701_SLD_REN_FCST_ACTUAL_20240310_20_16_16_v1.csv",
-        "20230701_20230801_SLD_REN_FCST_ACTUAL_20240310_20_16_55_v1.csv",
-        "20230801_20230901_SLD_REN_FCST_ACTUAL_20240310_20_20_59_v1.csv",
-    ]
-    
     lmp_arr = np.array([], dtype=float)
     demand_arr = np.array([], dtype=float)
     solar_arr = np.array([], dtype=float)
     wind_arr = np.array([], dtype=float)
     actual_solar_arr = np.array([], dtype=float)
-    
+
+    if not os.path.isfile(os.path.join(root, "oasis_header.csv")):
+        raise Exception("Missing 'oasis_header.csv' file")
+
+    df = pd.read_csv(os.path.join(root, "oasis_header.csv"), header="infer")
+    if np.sum(df["pnode"] == node_id) == 0:
+        raise Exception("Pnode %s does not exist in 'oasis_header.csv' directory" % node_id)
+    tac_id = df[df["pnode"] == node_id]["tac"].iloc[0]
+    zone_id = df[df["pnode"] == node_id]["zone"].iloc[0]
+
+    if not os.path.exists(os.path.join(root, node_id)):
+        raise Exception("Folder %s does not exist" % os.path.join(root, node_id))
+
+    startdates = ["601", "701", "731", "801", "831"]
+    enddates = ["701", "731", "801", "831", "901"]
+
+    for (startdate, enddate) in zip(startdates, enddates):
+
+        startdate=f"20230{startdate}"
+        enddate=f"20230{enddate}"
+
+        lmp_root_name = os.path.join(root, node_id, "%s_%s" % (startdate, enddate))
+        root_name = os.path.join(root, "COMMON", "%s_%s" % (startdate, enddate))
+        lmp_wildcard_name = "%s_PRC_RTPD_LMP_RTPD_*.csv" % lmp_root_name
+        demand_wildcard_name = "%s_SLD_FCST_DAM_*.csv" % root_name
+        renew_wildcard_name = "%s_SLD_REN_FCST_DAM_*.csv" % root_name
+        actual_renew_wildcard_name = "%s_SLD_REN_FCST_ACTUAL_*.csv" % root_name
+
+        lmp_fname = get_fname_from_wildcard(lmp_wildcard_name)
+        demand_fname = get_fname_from_wildcard(demand_wildcard_name)
+        renew_fname = get_fname_from_wildcard(renew_wildcard_name)
+        actual_renew_fname = get_fname_from_wildcard(actual_renew_wildcard_name)
+
+        """
     for fnames in zip(lmp_fnames, demand_fnames, renew_fnames, actual_renew_fnames):
         (lmp_fname, demand_fname, renew_fname, actual_renew_fname) = fnames
+        """
     
         # extract LMP @ MIL1_3_PASGNODE: only care about LMPs right now and sort by datetime
-        df = pd.read_csv(f"{root}/{lmp_fname}")
+        df = pd.read_csv(lmp_fname)
     
         lmp_idx = df.index[df['XML_DATA_ITEM'] == 'LMP_PRC'].tolist()
         df = df.iloc[lmp_idx]
@@ -65,23 +89,20 @@ def get_caiso_data(print_data=False):
     
         lmp_arr = np.append(lmp_arr, df['PRC'].values)
     
-        # print(df.info(), "\n")
-        # print(df.head(), "\n")
-    
         # extract demand at TAC LADWP
-        df = pd.read_csv(f"{root}/{demand_fname}")
+        df = pd.read_csv(demand_fname)
     
-        dem_idx = df.index[df['TAC_AREA_NAME'] == "LADWP"].tolist()
+        dem_idx = df.index[df['TAC_AREA_NAME'] == tac_id].tolist()
         df = df.iloc[dem_idx]
         df = df.sort_values(by=['INTERVALSTARTTIME_GMT'])
     
         demand_arr = np.append(demand_arr, df['MW'].values)
     
         # extract renewable at SP15
-        df = pd.read_csv(f"{root}/{renew_fname}")
+        df = pd.read_csv(renew_fname)
     
-        sol_idx = df.index[(df['RENEWABLE_TYPE'] == "Solar") & (df['TRADING_HUB'] == "SP15")].tolist()
-        wnd_idx = df.index[(df['RENEWABLE_TYPE'] == "Wind") & (df['TRADING_HUB'] == "SP15")].tolist()
+        sol_idx = df.index[(df['RENEWABLE_TYPE'] == "Solar") & (df['TRADING_HUB'] == zone_id)].tolist()
+        wnd_idx = df.index[(df['RENEWABLE_TYPE'] == "Wind") & (df['TRADING_HUB'] == zone_id)].tolist()
     
         df_sol = df.iloc[sol_idx]
         df_sol = df_sol.sort_values(by=['INTERVALSTARTTIME_GMT'])
@@ -92,10 +113,10 @@ def get_caiso_data(print_data=False):
         wind_arr = np.append(wind_arr, df_wnd['MW'].values)
 
         # extract actual rewnewable at SP15
-        df = pd.read_csv(f"{root}/{actual_renew_fname}")
+        df = pd.read_csv(actual_renew_fname)
     
-        sol_idx = df.index[(df['RENEWABLE_TYPE'] == "Solar") & (df['TRADING_HUB'] == "SP15")].tolist()
-        wnd_idx = df.index[(df['RENEWABLE_TYPE'] == "Wind") & (df['TRADING_HUB'] == "SP15")].tolist()
+        sol_idx = df.index[(df['RENEWABLE_TYPE'] == "Solar") & (df['TRADING_HUB'] == zone_id)].tolist()
+        wnd_idx = df.index[(df['RENEWABLE_TYPE'] == "Wind") & (df['TRADING_HUB'] == zone_id)].tolist()
     
         df_sol = df.iloc[sol_idx]
         df_sol = df_sol.sort_values(by=['INTERVALSTARTTIME_GMT'])
@@ -167,5 +188,5 @@ def simple_visualization():
     plt.show()
 
 if __name__ == '__main__':
-    # get_caiso_data(print_data=True)
-    simple_visualization()
+    get_caiso_data('FREMNT_1_N013', print_data=False)
+    # simple_visualization()
