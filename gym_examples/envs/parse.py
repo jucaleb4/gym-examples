@@ -92,11 +92,15 @@ def get_caiso_data(node_id, print_data=False):
         # extract demand at TAC LADWP
         df = pd.read_csv(demand_fname)
     
+        # TODO: Check if the tac is valid... often it is not, and we will get empty demand!
         dem_idx = df.index[df['TAC_AREA_NAME'] == tac_id].tolist()
         df = df.iloc[dem_idx]
         df = df.sort_values(by=['INTERVALSTARTTIME_GMT'])
     
-        demand_arr = np.append(demand_arr, df['MW'].values)
+        if len(df['MW'].values) > 0:
+            demand_arr = np.append(demand_arr, df['MW'].values)
+        else:
+            demand_arr = np.append(demand_arr, np.zeros(int(len(lmp_arr)/4)))
     
         # extract renewable at SP15
         df = pd.read_csv(renew_fname)
