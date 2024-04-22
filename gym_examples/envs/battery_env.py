@@ -33,7 +33,8 @@ class SimpleBatteryEnv(gym.Env):
             battery_power=100, 
             start_index=0,
             end_index=-1,
-            **kwargs):
+            **kwargs
+        ):
         """
         Constructor for simple battery env. We have three modes to describe state/action.
 
@@ -41,6 +42,7 @@ class SimpleBatteryEnv(gym.Env):
 
         The state space is represented as
 
+        :param pnode_id: which pnode
         :param battery_capacity: Battery capacity (MWh)
         :param battery_power: Battery power or transfer rate (MW)
         :param start_index: starting point of data
@@ -77,6 +79,8 @@ class SimpleBatteryEnv(gym.Env):
         self.daily_cost = float(kwargs.get("daily_cost", 0))
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
+        self.pnode_id = None
+        
         for key, val in kwargs.items():
             if key == "mode" and val == "fine_control":
                 self.mode = Mode.FINE_CONTROL
@@ -88,6 +92,11 @@ class SimpleBatteryEnv(gym.Env):
                 self.mode = Mode.SIGMOID_DIFF
             elif key == "data" and val == "periodic":
                 self.data = Mode.PERIODIC_DATA
+            elif key == "pnode_id":
+                self.pnode_id = val
+
+        if self.pnode_id is None:
+            raise Exception("You must pass 'pnode_id' as argument into BatteryEnv")
 
         self.load_data()
         self.penalty_rate = -np.max(self.lmp_arr)/20
@@ -102,7 +111,7 @@ class SimpleBatteryEnv(gym.Env):
 
     def load_data(self):
         if self.data == Mode.REAL_DATA:
-            lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = get_caiso_data()
+            lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = get_caiso_data(self.pnode_id)
             self.lmp_arr = lmp_arr
             self.demand_arr = demand_arr 
             self.solar_arr = solar_arr
