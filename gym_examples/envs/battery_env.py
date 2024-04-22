@@ -80,6 +80,8 @@ class SimpleBatteryEnv(gym.Env):
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
         self.pnode_id = None
+        self.reset_mode = None
+        self.reset_offset = 0
         
         for key, val in kwargs.items():
             if key == "mode" and val == "fine_control":
@@ -94,6 +96,10 @@ class SimpleBatteryEnv(gym.Env):
                 self.data = Mode.PERIODIC_DATA
             elif key == "pnode_id":
                 self.pnode_id = val
+            if key == "reset_mode":
+                self.reset_mode = val
+            if key == "reset_offset":
+                self.reset_offset = int(val)
 
         if self.pnode_id is None:
             raise Exception("You must pass 'pnode_id' as argument into BatteryEnv")
@@ -464,6 +470,12 @@ class SimpleBatteryEnv(gym.Env):
         self.avg_bought_lmp = 0
         if options is not None and options.get("rand_start", False):
             self.time_step = self.np_random.integers(self.start_index, self.end_index, dtype=int)
+        if self.reset_mode == "rand":
+            self.time_step = self.np_random.integers(
+                self.start_index, 
+                max(self.start_index, self.end_index-self.reset_offset), 
+                dtype=int
+            )
         elif options is not None:
             self.time_step = options.get("start", 0) % (self.end_index - self.start_index) + self.start_index
         else:
