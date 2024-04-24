@@ -74,7 +74,7 @@ class GridWorldEnv(gym.Env):
             "distance": np.linalg.norm(
                 self._agent_location - self._target_location, ord=1
             ),
-            "obstacles": self.obstacles_dt.keys(),
+            "obstacles": str(self.obstacles_dt.keys()),
         }
 
     def reset(self, seed=None, options=None):
