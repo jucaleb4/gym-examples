@@ -7,7 +7,7 @@ import numpy as np
 class GridWorldEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=10, action_eps=0.):
+    def __init__(self, render_mode=None, size=10, num_obstacles=0, action_eps=0.):
         self.action_eps = action_eps # probability fo doing random action
         self.size = size       # The size of the square grid
         self.window_size = 512 # The size of the PyGame window
@@ -36,6 +36,23 @@ class GridWorldEnv(gym.Env):
             3: np.array([0, -1]),
         }
 
+        # create obstacles, which upon landing, incurs a large penalty
+        rng = np.random.default_rng(0)
+        # number of obstacles cannot take up more than 20% of the grid 
+        num_obstacles = int(min(np.floor(size*size/5), num_obstacles))
+        obstacles_flat = rng.choice(size*size, size=num_obstacles, replace=False)
+        obstacles_x = np.mod(obstacles_flat, size)
+        obstacles_y = np.floor_divide(obstacles_flat, size)
+        self.obstacles_dt = {}
+        for (x,y) in zip(obstacles_x, obstacles_y):
+            self.obstacles_dt['(%i,%i)' % (x,y)] = True
+
+        all_points = [(x,y) for x in range(size) for y in range(size)]
+        self.feasible_points = list(filter(
+            lambda c : '(%i,%i)' % (c[0],c[1]) not in self.obstacles_dt, 
+            all_points
+        ))
+
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
 
@@ -56,7 +73,8 @@ class GridWorldEnv(gym.Env):
         return {
             "distance": np.linalg.norm(
                 self._agent_location - self._target_location, ord=1
-            )
+            ),
+            "obstacles": self.obstacles_dt.keys(),
         }
 
     def reset(self, seed=None, options=None):
@@ -64,14 +82,16 @@ class GridWorldEnv(gym.Env):
         super().reset(seed=seed)
 
         # Choose the agent's location uniformly at random
-        self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
+        # self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
+        self._agent_location = self.np_random.choice(self.feasible_points, size=1)
 
         # We will sample the target's location randomly until it does not coincide with the agent's location
         self._target_location = self._agent_location
         while np.array_equal(self._target_location, self._agent_location):
-            self._target_location = self.np_random.integers(
-                0, self.size, size=2, dtype=int
-            )
+            # self._target_location = self.np_random.integers(
+            #     0, self.size, size=2, dtype=int
+            # )
+            self._target_location = self.np_random.choice(self.feasible_points, size=1)
 
         if isinstance(options, dict) and "s_0" in options:
             self_agent_location = options["s_0"][:2]
@@ -105,6 +125,13 @@ class GridWorldEnv(gym.Env):
         )
         # An episode is done iff the agent has reached the target
         terminated = np.array_equal(self._agent_location, self._target_location)
+
+        # check if we stepped on an obstacle
+        agent_loc_str = '(%i,%i)' % (self._agent_location[0,0], self._agent_location[0,1])
+        if agent_loc_str in self.obstacles_dt:
+            assert not terminated, "Target cannot be same as obstacle"
+            reward = -5
+
         observation = self._get_obs()
         info = self._get_info()
 
