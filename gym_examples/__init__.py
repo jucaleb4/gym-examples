@@ -18,3 +18,9 @@ register(
     entry_point="gym_examples.envs:SimpleWorldEnv",
     max_episode_steps=1000,
 )
+
+register(
+    id="gym_examples/LQREnv-v0",
+    entry_point="gym_examples.envs:LQREnv",
+    max_episode_steps=1000,
+)
