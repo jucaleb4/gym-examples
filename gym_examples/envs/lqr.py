@@ -65,7 +65,7 @@ class LQREnv(gym.Env):
     def step(self, action):
         x = self.state
         u = action
-        cost = np.dot(x, self.Q@x) + np.dot(u, self.R@u)
+        reward = -np.dot(x, self.Q@x) + np.dot(u, self.R@u)
 
         w = self.np_random.multivariate_normal(mean=np.zeros(len(x)), cov=self.Cov)
 
@@ -75,7 +75,7 @@ class LQREnv(gym.Env):
         info = self._get_info()
         terminated = truncated = False
 
-        return observation, cost, terminated, truncated, info
+        return observation, reward, terminated, truncated, info
 
     def close(self):
         pass
