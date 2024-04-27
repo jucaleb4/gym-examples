@@ -9,7 +9,7 @@ class LQREnv(gym.Env):
 
     def __init__(self, render_mode=None):
         self.observation_space = spaces.Box(low=float('inf'), high=float('inf'), shape=(5,))
-        self.action_space = spaces.Box(low=float('inf'), high=float('inf'), shape=(4,))
+        self.action_space = spaces.Box(low=-1e6, high=1e6, shape=(4,))
         self.state = ...
 
         """ Control of Boeing 747 """
