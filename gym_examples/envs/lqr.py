@@ -65,7 +65,7 @@ class LQREnv(gym.Env):
     def step(self, action):
         x = self.state
         u = action
-        reward = -np.dot(x, self.Q@x) + np.dot(u, self.R@u)
+        reward = -(np.dot(x, self.Q@x) + np.dot(u, self.R@u))
 
         w = self.np_random.multivariate_normal(mean=np.zeros(len(x)), cov=self.Cov)
 
