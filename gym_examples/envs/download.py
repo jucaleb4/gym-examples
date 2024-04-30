@@ -4,7 +4,13 @@ import requests, zipfile, io
 import time
 import os
 
-def _download(node_id: str, item: str, folder:str):
+def _download(
+        node_id: str, 
+        item: str, 
+        folder:str
+        startdates: list,
+        enddates: list,
+    ):
     """ 
     Downloads data into designated folder
 
@@ -13,9 +19,6 @@ def _download(node_id: str, item: str, folder:str):
     :param folder: which folder to extract the files into
     """
     assert os.path.exists(folder), "Must have folder %s before downloading" % folder
-
-    startdates = ["601", "701", "731", "801", "831"]
-    enddates = ["701", "731", "801", "831", "901"]
 
     for (startdate, enddate) in zip(startdates, enddates):
 
@@ -78,8 +81,12 @@ def download(node_id: str, auxilary: bool):
     if not os.path.exists(folder):
         os.mkdir(folder)
 
+
+    startdates = ["601", "701", "731", "801", "831"]
+    enddates = ["701", "731", "801", "831", "901"]
+
     for item in items:
-        _download(node_id, item, folder)
+        _download(node_id, item, folder, startdates, enddates)
 
     """
     fname = "20230601_20230701_SLD_FCST_DAM_20230927_12_29_00_v1.csv"
