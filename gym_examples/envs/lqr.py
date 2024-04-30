@@ -8,7 +8,11 @@ class LQREnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
     def __init__(self, render_mode=None):
-        self.observation_space = spaces.Box(low=float('inf'), high=float('inf'), shape=(5,))
+        self.observation_space = spaces.Box(
+            low=-np.float64(np.inf), 
+            high=np.float64(np.inf), 
+            shape=(5,)
+        )
         self.action_space = spaces.Box(low=-1e9, high=1e9, shape=(4,))
         self.state = ...
 
