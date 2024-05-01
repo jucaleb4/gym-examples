@@ -32,7 +32,7 @@ class SimpleBatteryEnv(gym.Env):
             pnode_id=None,
             battery_capacity=400, 
             battery_power=100, 
-            start_date='W23',
+            season='W23',
             index_offset=0,
             **kwargs
         ):
@@ -99,7 +99,7 @@ class SimpleBatteryEnv(gym.Env):
         if self.pnode_id is None:
             raise Exception("You must pass 'pnode_id' as argument into BatteryEnv")
 
-        self.load_data(start_date)
+        self.load_data(season)
         self.penalty_rate = -np.max(self.lmp_arr)/20
         self.setup_observation_space(index_offset)
         self.setup_action_space()
@@ -110,16 +110,16 @@ class SimpleBatteryEnv(gym.Env):
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
 
-    def load_data(self, start_date):
+    def load_data(self, season):
         if self.data == Mode.REAL_DATA:
-            if start_date == 'W23':
+            if season == 'W23':
                 startdates = ["20230101", "20230131", "20230201", "20230301", "20230331"]
                 enddates = ["20230131", "20230201", "20230301", "20230331", "20230401"]
-            elif start_date == 'S23':
+            elif season == 'S23':
                 startdates = ["20230601", "20230701", "20230731", "20230801", "20230831"]
                 enddates = ["20230701", "20230731", "20230801", "20230831", "20230901"]
             else:
-                raise Exception("Unknown start_date=%s; must be 'W23' or 'S23'" % start_date)
+                raise Exception("Unknown season=%s; must be 'W23' or 'S23'" % season)
 
             caiso_data = get_caiso_data(self.pnode_id, startdates, enddates)
             lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = caiso_data
