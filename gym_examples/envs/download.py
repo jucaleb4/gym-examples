@@ -26,6 +26,19 @@ def lmp_data_already_exists(node_id, startdate, enddate):
 
     return False
 
+def auxiliary_data_already_exists(datatype, startdate, enddate):
+    """ Checks if original LMP or cleaned LMP data exists """
+    root = os.path.dirname(os.path.abspath(__file__))
+    if os.path.exists(root):
+        dates = '%s_%s' % (startdate, enddate)
+        data_wildcard_name = "%s_SLD_%s_*.csv" % (dates, datatype)
+        data_fname = get_fname_from_wildcard(data_wildcard_name, ignore_exception=True)
+        already_downloaded = data_fname is not None
+        if already_downloaded:
+            return True
+
+    return False
+
 def _download(
         node_id: str, 
         item: str, 
@@ -50,6 +63,7 @@ def _download(
 
         # for RT LMPs
         if item == "lmp":
+            assert node_id is not None
             if lmp_data_already_exists(node_id, startdate, enddate):
                 print("Skipping download of pnode %s during %s to %s" % (node_id, startdate, enddate))
                 continue
@@ -57,9 +71,17 @@ def _download(
             url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=PRC_RTPD_LMP&startdatetime={startdatetime}&enddatetime={enddatetime}&version=2&resultformat=6&market_run_id=RTPD&node={node_id}"
 
         elif item == "demand":
+            if auxiliary_data_already_exists('FCST_DAM', startdate, enddate):
+                print("Skipping download of FCST DAM during %s to %s" % (startdate, enddate))
+                continue
+
             url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_FCST&startdatetime={startdatetime}&enddatetime={enddatetime}&version=1&resultformat=6&market_run_id=DAM"
 
         elif item == "renewable":
+            if auxiliary_data_already_exists('REN_FCST_DAM', startdate, enddate):
+                print("Skipping download of FCST DAM during %s to %s" % (startdate, enddate))
+                continue
+
             url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_REN_FCST&startdatetime={startdatetime}&enddatetime={enddatetime}&version=1&resultformat=6&market_run_id=DAM"
             # url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_REN_FCST&startdatetime={startdatetime}&enddatetime={enddatetime}&version=1&resultformat=6&market_run_id=RTPD"
 
@@ -68,6 +90,10 @@ def _download(
             Found this by trial and error by looking at this api:
             http://www.caiso.com/Documents/OASIS-InterfaceSpecification_v4_3_5Clean_Spring2017Release.pdf
             """
+            if auxiliary_data_already_exists('REN_FCST_ACTUAL', startdate, enddate):
+                print("Skipping download of FCST DAM during %s to %s" % (startdate, enddate))
+                continue
+
             url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_REN_FCST&startdatetime={startdatetime}&enddatetime={enddatetime}&version=1&resultformat=6&market_run_id=ACTUAL"
 
         else:
@@ -81,7 +107,7 @@ def _download(
 
         # ensure at least 11s elapsed to prevent too many queries all at once
         e_time = time.time() - s_time
-        sleep_time = 5
+        sleep_time = max(5-e_time, 0) + 1
         time.sleep(sleep_time)
 
 def _clean(
@@ -120,7 +146,7 @@ def _clean(
         # remove original LMP data since it is large
         os.remove(lmp_fname)
 
-def download(year:int, node_id: str, auxilary: bool):
+def download(year:int, node_id: str, auxiliary: bool):
     """
     Creates download folder and downloads item and downloads data for the full 
     years. See `_download` for more info.
@@ -131,7 +157,7 @@ def download(year:int, node_id: str, auxilary: bool):
     TAC and REN: TAC_ECNTR, SP15
     """
 
-    if auxilary:
+    if auxiliary:
         items = ['demand', 'renewable', 'actual_renewable']
         folder = "COMMON"
     else:
@@ -201,9 +227,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument('--year', type=int, required=True)
-    parser.add_argument('--node_id', type=str, required=True)
-    parser.add_argument('--auxilary', action="store_true")
+    parser.add_argument('--node_id', type=str)
+    parser.add_argument('--auxiliary', action="store_true")
     args = parser.parse_args()
 
-    check_pnode_id(args.node_id)
-    download(args.year, args.node_id, args.auxilary)
+    if args.node_id is not None:
+        check_pnode_id(args.node_id)
+    download(args.year, args.node_id, args.auxiliary)

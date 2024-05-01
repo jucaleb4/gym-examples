@@ -32,7 +32,7 @@ def check_pnode_id(node_id: str):
     if np.sum(df["pnode"] == node_id) == 0:
         raise Exception("Pnode %s does not exist in 'oasis_header.csv' directory" % node_id)
 
-def get_caiso_data(node_id, print_data=False):
+def get_caiso_data(node_id, startdates, enddates, print_data=False):
     """
     Parses and returns data for ____ during 06/30/2023-08/30/2023
 
@@ -52,31 +52,25 @@ def get_caiso_data(node_id, print_data=False):
         raise Exception("Cannot find the root path %s" % root)
         # root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
 
-    check_pnode_id(node_id)
-
     lmp_arr = np.array([], dtype=float)
     demand_arr = np.array([], dtype=float)
     solar_arr = np.array([], dtype=float)
     wind_arr = np.array([], dtype=float)
     actual_solar_arr = np.array([], dtype=float)
 
+    check_pnode_id(node_id)
+    df = pd.read_csv(os.path.join(root, "oasis_header.csv"), header="infer")
     tac_id = df[df["pnode"] == node_id]["tac"].iloc[0]
     zone_id = df[df["pnode"] == node_id]["zone"].iloc[0]
 
     if not os.path.exists(os.path.join(root, node_id)):
-        raise Exception("Folder %s does not exist" % os.path.join(root, node_id))
-
-    startdates = ["601", "701", "731", "801", "831"]
-    enddates = ["701", "731", "801", "831", "901"]
+        raise Exception("Folder %s does not exist. Is it a valid pnode, and have you downloaded its data?" % os.path.join(root, node_id))
 
     for (startdate, enddate) in zip(startdates, enddates):
 
-        startdate=f"20230{startdate}"
-        enddate=f"20230{enddate}"
-
         lmp_root_name = os.path.join(root, node_id, "%s_%s" % (startdate, enddate))
         root_name = os.path.join(root, "COMMON", "%s_%s" % (startdate, enddate))
-        lmp_wildcard_name = "%s_PRC_RTPD_LMP_RTPD_*.csv" % lmp_root_name
+        lmp_wildcard_name = "%s_CLEAN_PRC_RTPD_LMP_RTPD_*.csv" % lmp_root_name
         demand_wildcard_name = "%s_SLD_FCST_DAM_*.csv" % root_name
         renew_wildcard_name = "%s_SLD_REN_FCST_DAM_*.csv" % root_name
         actual_renew_wildcard_name = "%s_SLD_REN_FCST_ACTUAL_*.csv" % root_name
@@ -92,13 +86,13 @@ def get_caiso_data(node_id, print_data=False):
         """
     
         # extract LMP @ MIL1_3_PASGNODE: only care about LMPs right now and sort by datetime
-        df = pd.read_csv(lmp_fname)
-    
-        lmp_idx = df.index[df['XML_DATA_ITEM'] == 'LMP_PRC'].tolist()
-        df = df.iloc[lmp_idx]
-        df = df.sort_values(by=['INTERVALSTARTTIME_GMT'])
-    
-        lmp_arr = np.append(lmp_arr, df['PRC'].values)
+        # df = pd.read_csv(lmp_fname)
+        # lmp_idx = df.index[df['XML_DATA_ITEM'] == 'LMP_PRC'].tolist()
+        # df = df.iloc[lmp_idx]
+        # df = df.sort_values(by=['INTERVALSTARTTIME_GMT'])
+        # lmp_arr = np.append(lmp_arr, df['PRC'].values)
+        df = pd.read_csv(lmp_fname, header='infer')
+        lmp_arr = np.append(lmp_arr, df['lmp'].values)
     
         # extract demand at TAC LADWP
         df = pd.read_csv(demand_fname)

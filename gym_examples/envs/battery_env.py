@@ -29,10 +29,11 @@ class SimpleBatteryEnv(gym.Env):
     def __init__(
             self, 
             render_mode=None, 
+            pnode_id=None,
             battery_capacity=400, 
             battery_power=100, 
-            start_index=0,
-            end_index=-1,
+            start_date='W23',
+            index_offset=0,
             **kwargs
         ):
         """
@@ -45,8 +46,7 @@ class SimpleBatteryEnv(gym.Env):
         :param pnode_id: which pnode
         :param battery_capacity: Battery capacity (MWh)
         :param battery_power: Battery power or transfer rate (MW)
-        :param start_index: starting point of data
-        :param end_index: ending point of data (-1 means we go until the end of data)
+        :param index_offset: starting point of data
         :param more_data: to include additional data, like DAM demand, solar, and wind
 
 
@@ -56,9 +56,6 @@ class SimpleBatteryEnv(gym.Env):
         human-mode. They will remain `None` until human-mode is used for the
         first time.
         """
-        assert 0 <= start_index, f"Invalid start index {start_index}"
-        assert end_index == -1 or start_index < end_index, f"Invalid end index {end_index} > start index {start_index}"
-
         # "state" variables 
         self.rt_scale = 0.25 # since we are operating every 15min
         self.battery_power = battery_power
@@ -79,7 +76,7 @@ class SimpleBatteryEnv(gym.Env):
         self.daily_cost = float(kwargs.get("daily_cost", 0))
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
-        self.pnode_id = None
+        self.pnode_id = pnode_id
         self.reset_mode = None
         self.reset_offset = 0
         
@@ -94,8 +91,6 @@ class SimpleBatteryEnv(gym.Env):
                 self.mode = Mode.SIGMOID_DIFF
             elif key == "data" and val == "periodic":
                 self.data = Mode.PERIODIC_DATA
-            elif key == "pnode_id":
-                self.pnode_id = val
             if key == "reset_mode":
                 self.reset_mode = val
             if key == "reset_offset":
@@ -104,9 +99,9 @@ class SimpleBatteryEnv(gym.Env):
         if self.pnode_id is None:
             raise Exception("You must pass 'pnode_id' as argument into BatteryEnv")
 
-        self.load_data()
+        self.load_data(start_date)
         self.penalty_rate = -np.max(self.lmp_arr)/20
-        self.setup_observation_space(start_index, end_index)
+        self.setup_observation_space(index_offset)
         self.setup_action_space()
 
         self.window_size = 512  # The size of the PyGame window
@@ -115,9 +110,19 @@ class SimpleBatteryEnv(gym.Env):
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
 
-    def load_data(self):
+    def load_data(self, start_date):
         if self.data == Mode.REAL_DATA:
-            lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = get_caiso_data(self.pnode_id)
+            if start_date == 'W23':
+                startdates = ["20230101", "20230131", "20230201", "20230301", "20230331"]
+                enddates = ["20230131", "20230201", "20230301", "20230331", "20230401"]
+            elif start_date == 'S23':
+                startdates = ["20230601", "20230701", "20230731", "20230801", "20230831"]
+                enddates = ["20230701", "20230731", "20230801", "20230831", "20230901"]
+            else:
+                raise Exception("Unknown start_date=%s; must be 'W23' or 'S23'" % start_date)
+
+            caiso_data = get_caiso_data(self.pnode_id, startdates, enddates)
+            lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = caiso_data
             self.lmp_arr = lmp_arr
             self.demand_arr = demand_arr 
             self.solar_arr = solar_arr
@@ -133,7 +138,7 @@ class SimpleBatteryEnv(gym.Env):
             ndata = 90 * 4 * 24
             self.lmp_arr = (hi-lo)/2 * (np.sin(np.arange(ndata) * 2 * np.pi/(4*24)) + 1) + (hi+lo)/2
 
-    def setup_observation_space(self, start_index, end_index):
+    def setup_observation_space(self, index_offset):
         """
             - DEFAULT: Normal on/off charging at 15 min interval
             - FINE_CONTROL: More fine-grained charging
@@ -156,8 +161,7 @@ class SimpleBatteryEnv(gym.Env):
         # this will be used to construct the Dict observation space
         dt = OrderedDict()
 
-        self.start_index = min(start_index, len(self.lmp_arr)-1)
-        self.end_index = len(self.lmp_arr) if end_index == -1 else min(end_index, len(self.lmp_arr))
+        self.start_index = index_offset
         self.time_step = self.start_index
 
         lows = np.append(0, [np.min(self.lmp_arr)]*self.nhistory)
@@ -304,8 +308,8 @@ class SimpleBatteryEnv(gym.Env):
             np.arange(rt_idx-self.nhistory+1,rt_idx+1), 
             mode="wrap")[::-1]
         obs = OrderedDict([
-            ("battery_soc", np.array([self.battery_storage])),
-            ("lmps", recent_lmps), 
+            ("battery_soc", np.array([self.battery_storage]).astype('float32')),
+            ("lmps", recent_lmps.astype('float32')), 
         ])
 
         if self.more_data:
@@ -362,17 +366,18 @@ class SimpleBatteryEnv(gym.Env):
                 np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
                 mode="wrap")[::-1]
             # obs = np.append(obs, recent_actual_solar)
-            obs["solars"] = recent_actual_solar
+            obs["solars"] = recent_actual_solar.astype('float32')
 
         return obs
 
-    def _get_info(self, solar_reward=0, grid_reward=0):
+    def _get_info(self, solar_reward=0, grid_reward=0, net_load=0):
         return {
             "time_step": self.time_step,
             "solar_reward": solar_reward,
             "grid_reward": grid_reward,
             "soc": self.battery_storage,
             "curr_lmp": self.lmp_arr[self.time_step],
+            "net_load": net_load,
         }
 
     def step(self, action):
@@ -421,13 +426,14 @@ class SimpleBatteryEnv(gym.Env):
             energy_from_grid = battery_charge-solar_energy
             self.battery_storage += battery_charge
             solar_surplus = solar_energy
+        net_load = -energy_from_grid + solar_surplus
 
-        curr_lmp = self.lmp_arr[rt_idx] # unit: $/MWh
-        if self.time_step < self.end_index-1: 
+        if self.time_step < len(self.lmp_arr)-1: 
             self.time_step += 1
         else:
             self.time_step = self.start_index
 
+        curr_lmp = self.lmp_arr[rt_idx] # unit: $/MWh
         solar_reward = curr_lmp * solar_surplus
         grid_reward = 0
         if self.delay_cost:
@@ -452,7 +458,7 @@ class SimpleBatteryEnv(gym.Env):
         reward -= self.daily_cost
 
         observation = self._get_obs()
-        info = self._get_info(solar_reward, grid_reward)
+        info = self._get_info(solar_reward, grid_reward, net_load)
 
         if self.render_mode == "human":
             self.render_frame()
@@ -469,15 +475,15 @@ class SimpleBatteryEnv(gym.Env):
         self.battery_storage = 0
         self.avg_bought_lmp = 0
         if options is not None and options.get("rand_start", False):
-            self.time_step = self.np_random.integers(self.start_index, self.end_index, dtype=int)
+            self.time_step = self.np_random.integers(self.start_index, len(self.lmp_arr), dtype=int)
         if self.reset_mode == "rand":
             self.time_step = self.np_random.integers(
                 self.start_index, 
-                max(self.start_index, self.end_index-self.reset_offset), 
+                len(self.lmp_arr),
                 dtype=int
             )
         elif options is not None:
-            self.time_step = options.get("start", 0) % (self.end_index - self.start_index) + self.start_index
+            self.time_step = options.get("start", 0) % (len(self.lmp_arr) - self.start_index) + self.start_index
         else:
             self.time_step = self.start_index
 
