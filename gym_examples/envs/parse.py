@@ -8,14 +8,29 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def get_fname_from_wildcard(wildcard_fname: str):
+def get_fname_from_wildcard(wildcard_fname: str, ignore_exception=False):
     fnames = glob.glob(wildcard_fname)
     if len(fnames) != 1:
+        if ignore_exception:
+            return None
+
         raise Exception("Expected one file for wildcard %s, got %i" % (
             wildcard_fname, 
             len(fnames)
         ))
     return fnames[0]
+
+def check_pnode_id(node_id: str):
+    root = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.exists(root):
+        raise Exception("Cannot find the root path %s" % root)
+
+    if not os.path.isfile(os.path.join(root, "oasis_header.csv")):
+        raise Exception("Missing 'oasis_header.csv' file")
+
+    df = pd.read_csv(os.path.join(root, "oasis_header.csv"), header="infer")
+    if np.sum(df["pnode"] == node_id) == 0:
+        raise Exception("Pnode %s does not exist in 'oasis_header.csv' directory" % node_id)
 
 def get_caiso_data(node_id, print_data=False):
     """
@@ -37,18 +52,14 @@ def get_caiso_data(node_id, print_data=False):
         raise Exception("Cannot find the root path %s" % root)
         # root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
 
+    check_pnode_id(node_id)
+
     lmp_arr = np.array([], dtype=float)
     demand_arr = np.array([], dtype=float)
     solar_arr = np.array([], dtype=float)
     wind_arr = np.array([], dtype=float)
     actual_solar_arr = np.array([], dtype=float)
 
-    if not os.path.isfile(os.path.join(root, "oasis_header.csv")):
-        raise Exception("Missing 'oasis_header.csv' file")
-
-    df = pd.read_csv(os.path.join(root, "oasis_header.csv"), header="infer")
-    if np.sum(df["pnode"] == node_id) == 0:
-        raise Exception("Pnode %s does not exist in 'oasis_header.csv' directory" % node_id)
     tac_id = df[df["pnode"] == node_id]["tac"].iloc[0]
     zone_id = df[df["pnode"] == node_id]["zone"].iloc[0]
 
