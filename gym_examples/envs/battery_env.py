@@ -438,11 +438,12 @@ class SimpleBatteryEnv(gym.Env):
             self.battery_storage -= battery_leak_amt
             last_charge = None
             # account for floating point error
-            while battery_leak_amt > 1e-14:
+            while battery_leak_amt > 1e-10 and len(self.charge_composition) > 0:
+                assert len(self.charge_composition) > 0
                 last_charge = self.charge_composition.pop()
                 battery_leak_cvg = min(battery_leak_amt, last_charge[1])
                 battery_leak_amt -= battery_leak_cvg
-            if last_charge is not None:
+            if last_charge is not None and (last_charge[1] > battery_leak_cvg):
                 self.charge_composition.append((last_charge[0], last_charge[1]-battery_leak_cvg))
 
         # charge
@@ -456,10 +457,14 @@ class SimpleBatteryEnv(gym.Env):
             self.battery_storage += self.efficiency * battery_charge
             solar_surplus = solar_power*self.rt_scale - solar_energy
 
+            accounted_for_charge = False
             if solar_energy > 0:
                 self.charge_composition.append(('solar', self.efficiency*solar_energy))
+                accounted_for_charge = True
             if energy_from_grid > 0:
                 self.charge_composition.append(('grid', self.efficiency*energy_from_grid))
+                accounted_for_charge = True
+            assert accounted_for_charge
 
         # discharge
         energy_from_grid_battery = 0
@@ -469,11 +474,12 @@ class SimpleBatteryEnv(gym.Env):
             # charge_power <= 0
             battery_charge = max(-self.battery_storage, 
                                   charge_power*self.rt_scale) # unit: MWh
+            assert battery_charge <= 0
             self.battery_storage += battery_charge
 
             last_charge = None
             battery_discharge_amt = -battery_charge
-            while battery_discharge_amt > 1e-14:
+            while battery_discharge_amt > 1e-10 and len(self.charge_composition) > 0:
                 last_charge = self.charge_composition.pop()
                 battery_discharge_cvg = min(battery_discharge_amt, last_charge[1])
                 battery_discharge_amt -= battery_discharge_cvg
@@ -484,7 +490,7 @@ class SimpleBatteryEnv(gym.Env):
                 else:
                     raise Exception('Unknown charge type %s' % charge[0])
 
-            if last_charge is not None:
+            if last_charge is not None and (last_charge[1] > battery_discharge_cvg):
                 self.charge_composition.append((last_charge[0], last_charge[1]-battery_discharge_cvg))
 
             battery_charge *= self.efficiency
