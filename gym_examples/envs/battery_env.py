@@ -32,6 +32,7 @@ class SimpleBatteryEnv(gym.Env):
             pnode_id=None,
             battery_capacity=400, 
             battery_power=100, 
+            efficiency=1.0,
             season='W23',
             index_offset=0,
             **kwargs
@@ -61,9 +62,11 @@ class SimpleBatteryEnv(gym.Env):
         self.battery_power = battery_power
         self.battery_capacity = battery_capacity 
         self.battery_storage = 0.
+        self.efficiency = efficiency
         self.avg_bought_lmp = 0. # unit: $/MWh
         self.n_charges_left = 0   # for multi-period buying
         self.num_consecutive_idle_steps = 0 
+        self.charge_composition = []
 
         # below are settings for the environment
         self.more_data = bool(kwargs.get("more_data", False))
@@ -370,12 +373,34 @@ class SimpleBatteryEnv(gym.Env):
 
         return obs
 
-    def _get_info(self, solar_reward=0, grid_reward=0, net_load=0):
+    def _get_info(self, solar_reward=0, grid_battery_reward=0, solar_battery_reward=0, net_load=0):
+        energy_from_grid = 0
+        energy_from_solar = 0
+        for charge in self.charge_composition:
+            if charge[0] == 'grid':
+                energy_from_grid += charge[1]
+            elif charge[0] == 'solar':
+                energy_from_solar += charge[1]
+            else:
+                raise Exception('Unknown charge type: %s' % charge[0])
+
+        # ensure our charge composition is close to the batteyr sotrage
+        calculated_energy = energy_from_grid + energy_from_solar
+        num = abs(calculated_energy - self.battery_storage)
+        den = (1 + min(calculated_energy,self.battery_storage)) 
+        rel_err_in_battery_storage = num/den
+        # TODO: Remove this if it doesn't appear...
+        if rel_err_in_battery_storage > 1e-3:
+            warnings.warn('Large difference between calculated energy=%.4e and battery storage=%.4e' % (calculated_energy, self.battery_storage))
+
         return {
             "time_step": self.time_step,
             "solar_reward": solar_reward,
-            "grid_reward": grid_reward,
+            "grid_battery_reward": grid_battery_reward,
+            "solar_battery_reward": solar_battery_reward,
             "soc": self.battery_storage,
+            "soc_grid": energy_from_grid,
+            "soc_solar": energy_from_solar,
             "curr_lmp": self.lmp_arr[self.time_step],
             "net_load": net_load,
         }
@@ -407,6 +432,19 @@ class SimpleBatteryEnv(gym.Env):
         else:
             solar_power = 0
 
+        # apply battery degradation
+        if self.battery_storage >= 0.9*self.battery_capacity:
+            battery_leak_amt = 0.1/(4*24) * self.battery_storage
+            self.battery_storage -= battery_leak_amt
+            last_charge = None
+            # account for floating point error
+            while battery_leak_amt > 1e-14:
+                last_charge = self.charge_composition.pop()
+                battery_leak_cvg = min(battery_leak_amt, last_charge[1])
+                battery_leak_amt -= battery_leak_cvg
+            if last_charge is not None:
+                self.charge_composition.append((last_charge[0], last_charge[1]-battery_leak_cvg))
+
         # charge
         if charge_power > 0:
             max_charge = min(self.battery_capacity-self.battery_storage, 
@@ -415,17 +453,44 @@ class SimpleBatteryEnv(gym.Env):
             energy_from_grid = min(charge_power*self.rt_scale, 
                                    max_charge-solar_energy)
             battery_charge = solar_energy + energy_from_grid
-            self.battery_storage += battery_charge
+            self.battery_storage += self.efficiency * battery_charge
             solar_surplus = solar_power*self.rt_scale - solar_energy
+
+            if solar_energy > 0:
+                self.charge_composition.append(('solar', self.efficiency*solar_energy))
+            if energy_from_grid > 0:
+                self.charge_composition.append(('grid', self.efficiency*energy_from_grid))
+
         # discharge
-        elif charge_power <= 0:
+        energy_from_grid_battery = 0
+        energy_from_solar_battery = 0
+        if charge_power <= 0:
             solar_energy = solar_power*self.rt_scale
             # charge_power <= 0
             battery_charge = max(-self.battery_storage, 
                                   charge_power*self.rt_scale) # unit: MWh
-            energy_from_grid = battery_charge-solar_energy
             self.battery_storage += battery_charge
+
+            last_charge = None
+            battery_discharge_amt = -battery_charge
+            while battery_discharge_amt > 1e-14:
+                last_charge = self.charge_composition.pop()
+                battery_discharge_cvg = min(battery_discharge_amt, last_charge[1])
+                battery_discharge_amt -= battery_discharge_cvg
+                if last_charge[0] == 'grid':
+                    energy_from_grid_battery += self.efficiency*battery_discharge_cvg
+                elif last_charge[0] == 'solar':
+                    energy_from_solar_battery += self.efficiency*battery_discharge_cvg
+                else:
+                    raise Exception('Unknown charge type %s' % charge[0])
+
+            if last_charge is not None:
+                self.charge_composition.append((last_charge[0], last_charge[1]-battery_discharge_cvg))
+
+            battery_charge *= self.efficiency
+            energy_from_grid = battery_charge-solar_energy
             solar_surplus = solar_energy
+
         net_load = -energy_from_grid + solar_surplus
 
         if self.time_step < len(self.lmp_arr)-1: 
@@ -435,7 +500,8 @@ class SimpleBatteryEnv(gym.Env):
 
         curr_lmp = self.lmp_arr[rt_idx] # unit: $/MWh
         solar_reward = curr_lmp * solar_surplus
-        grid_reward = 0
+        solar_battery_reward = 0
+        grid_battery_reward = 0
         if self.delay_cost:
             if charge_power > 0:
                 # fraction of energy from charging now
@@ -449,16 +515,21 @@ class SimpleBatteryEnv(gym.Env):
         else:
             # assuming lmp>=0, discharge (or lose energy) yields profits 
             if charge_power > 0:
-                grid_reward = (-energy_from_grid) * curr_lmp
+                # energy_from_grid > 0
+                grid_battery_reward = (-energy_from_grid) * curr_lmp
             else:
-                grid_reward = (-battery_charge) * curr_lmp
+                # grid_reward = -battery_charge * curr_lmp
+                grid_battery_reward = energy_from_grid_battery * curr_lmp
+                solar_battery_reward = energy_from_solar_battery * curr_lmp
+
+            grid_reward = grid_battery_reward + solar_battery_reward
 
         # every time step penalty (e.g., from investment costs)
         reward = solar_reward + grid_reward
         reward -= self.daily_cost
 
         observation = self._get_obs()
-        info = self._get_info(solar_reward, grid_reward, net_load)
+        info = self._get_info(solar_reward, grid_battery_reward, solar_battery_reward, net_load)
 
         if self.render_mode == "human":
             self.render_frame()
@@ -474,6 +545,7 @@ class SimpleBatteryEnv(gym.Env):
 
         self.battery_storage = 0
         self.avg_bought_lmp = 0
+        self.charge_composition = []
         if options is not None and options.get("rand_start", False):
             self.time_step = self.np_random.integers(self.start_index, len(self.lmp_arr), dtype=int)
         if self.reset_mode == "rand":
