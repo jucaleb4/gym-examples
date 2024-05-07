@@ -32,7 +32,7 @@ class SimpleBatteryEnv(gym.Env):
             pnode_id=None,
             battery_capacity=400, 
             battery_power=100, 
-            efficiency=1.0,
+            efficiency=0.93,
             season='W23',
             index_offset=0,
             **kwargs
