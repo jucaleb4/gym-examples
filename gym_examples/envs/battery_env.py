@@ -1,4 +1,5 @@
 import warnings
+import re
 
 from collections import OrderedDict
 from enum import Enum
@@ -113,16 +114,27 @@ class SimpleBatteryEnv(gym.Env):
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
 
-    def load_data(self, season):
+    def load_data(self, seasonyear):
         if self.data == Mode.REAL_DATA:
-            if season == 'W23':
-                startdates = ["20230101", "20230131", "20230201", "20230301", "20230331"]
-                enddates = ["20230131", "20230201", "20230301", "20230331", "20230401"]
-            elif season == 'S23':
-                startdates = ["20230601", "20230701", "20230731", "20230801", "20230831"]
-                enddates = ["20230701", "20230731", "20230801", "20230831", "20230901"]
+            seasonyear_split = list(filter(None, re.split(r'(\d+)', seasonyear)))
+            if len(seasonyear_split) != 2:
+                raise Exception("Given invalid season %s, must be SeasonYear" % seasonyear)
+            season = seasonyear_split[0]
+            yr = int(seasonyear_split[1])
+            if season == 'W':
+                startdates = ["20%i1201" % (yr-1), "20%i1231" % (yr-1), "20%i0101" % yr, "20%i0131" % yr, "20%i0201" % yr]
+                enddates = ["20%i1231" % (yr-1), "20%i0101" % yr, "20%i0131" % yr, "20%i0201" % yr, "20%i0301" % yr]
+            elif season == 'Sp':
+                startdates = ["20%i0301" % yr, "20%i0331" % yr, "20%i0401" % yr, "20%i0501" % yr, "20%i0531" % yr]
+                enddates = ["20%i0331" % yr, "20%i0401" % yr, "20%i0501" % yr, "20%i0531" % yr, "20%i0601" % yr]
+            elif season == 'S':
+                startdates = ["20%i0601" % yr, "20%i0701" % yr, "20%i0731" % yr, "20%i0801" % yr, "20%i0831" % yr]
+                enddates = ["20%i0701" % yr, "20%i0731" % yr, "20%i0801" % yr, "20%i0831" % yr, "20%i0901" % yr]
+            elif season == 'F':
+                startdates = ["20%i0901" % yr, "20%i1001" % yr, "20%i1031" % yr, "20%i1101" % yr]
+                enddates = ["20%i1001" % yr, "20%i1031" % yr, "20%i1101" % yr, "20%i1201" % yr]
             else:
-                raise Exception("Unknown season=%s; must be 'W23' or 'S23'" % season)
+                raise Exception("Unknown season=%s; must be 'W', 'Sp', 'S', or 'F'" % season)
 
             caiso_data = get_caiso_data(self.pnode_id, startdates, enddates)
             lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = caiso_data

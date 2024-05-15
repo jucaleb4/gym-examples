@@ -168,43 +168,43 @@ def download(year:int, node_id: str, auxiliary: bool):
     if not os.path.exists(folder):
         os.mkdir(folder)
 
-    days_in_month = OrderedDict([
-        (1, 31),
-        (2, 29 if year % 4 == 0 else 28),
-        (3, 31),
-        (4, 30),
-        (5, 31),
-        (6, 30),
-        (7, 31),
-        (8, 31),
-        (9, 30),
-        (10, 31),
-        (11, 30),
-        (12, 31),
-    ])
+    days_in_month = [
+        (12, 31, year-1),
+        (1, 31, year),
+        (2, 29 if year % 4 == 0 else 28, year),
+        (3, 31, year),
+        (4, 30, year),
+        (5, 31, year),
+        (6, 30, year),
+        (7, 31, year),
+        (8, 31, year),
+        (9, 30, year),
+        (10, 31, year),
+        (11, 30, year),
+    ]
         
     startdates = []
     enddates = []
-    for (mo, num_days) in days_in_month.items():
+    for (mo, num_days, yr) in days_in_month:
         if num_days >= 31:
-            startdate = "%i%02d01" % (year, mo)
-            enddate = "%i%02d31" % (year, mo)
+            startdate = "%i%02d01" % (yr, mo)
+            enddate = "%i%02d31" % (yr, mo)
             startdates.append(startdate)
             enddates.append(enddate)
 
-            startdate = "%i%02d31" % (year, mo)
-            enddate = "%i%02d01" % (year + 1 if mo == 12 else year, (mo % 12) + 1)
+            startdate = "%i%02d31" % (yr, mo)
+            enddate = "%i%02d01" % (yr+1 if mo == 12 else yr, (mo % 12) + 1)
             startdates.append(startdate)
             enddates.append(enddate)
 
         else:
-            startdate = "%i%02d01" % (year, mo)
-            enddate = "%i%02d01" % (year, (mo % 12) + 1)
+            startdate = "%i%02d01" % (yr, mo)
+            enddate = "%i%02d01" % (yr, (mo % 12) + 1)
             startdates.append(startdate)
             enddates.append(enddate)
 
-    for item in items:
-        _download(node_id, item, folder, startdates, enddates)
+    # for item in items:
+    #     _download(node_id, item, folder, startdates, enddates)
     if 'lmp' in items:
         _clean(node_id, startdates, enddates)
 
