@@ -124,6 +124,9 @@ class SimpleBatteryEnv(gym.Env):
             if season == 'W':
                 startdates = ["20%i1201" % (yr-1), "20%i1231" % (yr-1), "20%i0101" % yr, "20%i0131" % yr, "20%i0201" % yr]
                 enddates = ["20%i1231" % (yr-1), "20%i0101" % yr, "20%i0131" % yr, "20%i0201" % yr, "20%i0301" % yr]
+            elif season == 'w':
+                startdates = ["20%i0101" % (yr), "20%i0131" % (yr), "20%i0201" % yr, "20%i0301" % yr, "20%i0331" % yr]
+                enddates = ["20%i0131" % (yr), "20%i0201" % yr, "20%i0301" % yr, "20%i0331" % yr, "20%i0401" % yr]
             elif season == 'Sp':
                 startdates = ["20%i0301" % yr, "20%i0331" % yr, "20%i0401" % yr, "20%i0501" % yr, "20%i0531" % yr]
                 enddates = ["20%i0331" % yr, "20%i0401" % yr, "20%i0501" % yr, "20%i0531" % yr, "20%i0601" % yr]
@@ -137,11 +140,12 @@ class SimpleBatteryEnv(gym.Env):
                 raise Exception("Unknown season=%s; must be 'W', 'Sp', 'S', or 'F'" % season)
 
             caiso_data = get_caiso_data(self.pnode_id, startdates, enddates)
-            lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr = caiso_data
+            lmp_arr, demand_arr, solar_arr, wind_arr, actual_demand_arr, actual_solar_arr = caiso_data
             self.lmp_arr = lmp_arr
             self.demand_arr = demand_arr 
             self.solar_arr = solar_arr
             self.wind_arr = wind_arr
+            self.actual_demand_arr = actual_demand_arr
             self.actual_solar_arr = actual_solar_arr
 
             # we scale down the solar power so that it matches 10% of battery charging
@@ -509,6 +513,7 @@ class SimpleBatteryEnv(gym.Env):
             energy_from_grid = battery_charge-solar_energy
             solar_surplus = solar_energy
 
+        # positive is energy back into grid, negative is energy from grid
         net_load = -energy_from_grid + solar_surplus
 
         if self.time_step < len(self.lmp_arr)-1: 
@@ -528,6 +533,7 @@ class SimpleBatteryEnv(gym.Env):
                 beta = energy_from_grid/battery_charge
 
                 self.avg_bought_lmp = (1.-alpha)*self.avg_bought_lmp + alpha*beta*curr_lmp # unit: $/MWh
+                grid_reward = 0
             else:
                 grid_reward = (curr_lmp - self.avg_bought_lmp) * (-battery_charge)
         else:

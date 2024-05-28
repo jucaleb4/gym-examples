@@ -85,6 +85,13 @@ def _download(
             url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_REN_FCST&startdatetime={startdatetime}&enddatetime={enddatetime}&version=1&resultformat=6&market_run_id=DAM"
             # url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_REN_FCST&startdatetime={startdatetime}&enddatetime={enddatetime}&version=1&resultformat=6&market_run_id=RTPD"
 
+        elif item == "actual_demand":
+            if auxiliary_data_already_exists('FCST_DAM_ACTUAL', startdate, enddate):
+                print("Skipping download of FCST DAM during %s to %s" % (startdate, enddate))
+                continue
+
+            url = f"http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_FCST&startdatetime={startdatetime}&enddatetime={enddatetime}&version=1&resultformat=6&market_run_id=ACTUAL"
+
         elif item == "actual_renewable":
             """
             Found this by trial and error by looking at this api:
@@ -158,7 +165,8 @@ def download(year:int, node_id: str, auxiliary: bool):
     """
 
     if auxiliary:
-        items = ['demand', 'renewable', 'actual_renewable']
+        items = ['demand', 'renewable', 'actual_renewable', 'actual_demand']
+        # items = ['actual_demand']
         folder = "COMMON"
     else:
         items = ['lmp']
@@ -203,8 +211,8 @@ def download(year:int, node_id: str, auxiliary: bool):
             startdates.append(startdate)
             enddates.append(enddate)
 
-    # for item in items:
-    #     _download(node_id, item, folder, startdates, enddates)
+    for item in items:
+        _download(node_id, item, folder, startdates, enddates)
     if 'lmp' in items:
         _clean(node_id, startdates, enddates)
 
