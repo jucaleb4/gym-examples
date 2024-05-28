@@ -205,6 +205,7 @@ class SimpleBatteryEnv(gym.Env):
             dt["demand_fcsts"] = spaces.Box(low=np.min(self.demand_arr), high=np.max(self.demand_arr), shape=(self.nhistory_hour,))
             dt["solar_fcsts"] = spaces.Box(low=np.min(self.solar_arr), high=np.max(self.solar_arr), shape=(self.nhistory_hour,))
             dt["wind_fcsts"] = spaces.Box(low=np.min(self.wind_arr), high=np.max(self.wind_arr), shape=(self.nhistory_hour,))
+            dt["demands"] = spaces.Box(low=np.min(self.actual_demand_arr), high=np.max(self.actual_demand_arr), shape=(self.nhistory_hour,))
         if self.mode == Mode.LONG_CHARGE:
             lows = np.append(lows, 0)
             highs = np.append(highs, 2)
@@ -341,6 +342,9 @@ class SimpleBatteryEnv(gym.Env):
             recent_wind = self.wind_arr.take(
                 np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
                 mode="wrap")[::-1]
+            recent_actual_demand = self.actual_demand_arr.take(
+                np.arange(da_idx-self.nhistory_hour+1,da_idx+1), 
+                mode="wrap")[::-1]
             # obs = np.append(obs, recent_demand) 
             # obs = np.append(obs, recent_solar) 
             # obs = np.append(obs, recent_wind)
@@ -348,6 +352,7 @@ class SimpleBatteryEnv(gym.Env):
             obs["demand_fcsts"] = recent_demand
             obs["solar_fcsts"] = recent_solar
             obs["wind_fcsts"] = recent_wind
+            obs["demands"] = recent_actual_demand
 
         if self.mode == Mode.LONG_CHARGE:
             # obs = np.append(obs, self.n_charges_left)

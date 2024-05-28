@@ -56,6 +56,7 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
     demand_arr = np.array([], dtype=float)
     solar_arr = np.array([], dtype=float)
     wind_arr = np.array([], dtype=float)
+    actual_demand_arr = np.array([], dtype=float)
     actual_solar_arr = np.array([], dtype=float)
 
     check_pnode_id(node_id)
@@ -73,11 +74,13 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
         lmp_wildcard_name = "%s_CLEAN_PRC_RTPD_LMP_RTPD_*.csv" % lmp_root_name
         demand_wildcard_name = "%s_SLD_FCST_DAM_*.csv" % root_name
         renew_wildcard_name = "%s_SLD_REN_FCST_DAM_*.csv" % root_name
+        actual_demand_wildcard_name = "%s_SLD_FCST_ACTUAL_*.csv" % root_name
         actual_renew_wildcard_name = "%s_SLD_REN_FCST_ACTUAL_*.csv" % root_name
 
         lmp_fname = get_fname_from_wildcard(lmp_wildcard_name)
         demand_fname = get_fname_from_wildcard(demand_wildcard_name)
         renew_fname = get_fname_from_wildcard(renew_wildcard_name)
+        actual_demand_fname = get_fname_from_wildcard(actual_demand_wildcard_name)
         actual_renew_fname = get_fname_from_wildcard(actual_renew_wildcard_name)
 
         """
@@ -99,6 +102,8 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
     
         # TODO: Check if the tac is valid... often it is not, and we will get empty demand!
         dem_idx = df.index[df['TAC_AREA_NAME'] == tac_id].tolist()
+        # dem_idx = df.index[df['TAC_AREA_NAME'] == 'LADWP'].tolist()
+        # dem_idx = df.index[df['TAC_AREA_NAME'] == 'CA ISO-TAC'].tolist()
         df = df.iloc[dem_idx]
         df = df.sort_values(by=['INTERVALSTARTTIME_GMT'])
     
@@ -121,6 +126,13 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
         solar_arr = np.append(solar_arr, df_sol['MW'].values)
         wind_arr = np.append(wind_arr, df_wnd['MW'].values)
 
+        # extract actual demand at ...
+        df = pd.read_csv(actual_demand_fname)
+        dem_idx = df.index[df['TAC_AREA_NAME'] == tac_id].tolist()
+        df = df.iloc[dem_idx]
+        df = df.sort_values(by=['INTERVALSTARTTIME_GMT'])
+        actual_demand_arr = np.append(actual_demand_arr, df['MW'].values)
+
         # extract actual rewnewable at SP15
         df = pd.read_csv(actual_renew_fname)
     
@@ -129,12 +141,34 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
     
         df_sol = df.iloc[sol_idx]
         df_sol = df_sol.sort_values(by=['INTERVALSTARTTIME_GMT'])
+
+        missing_data = []
+        for i in range(len(df_sol)-1):
+            if df_sol.iloc[i+1]['INTERVALSTARTTIME_GMT'] != df_sol.iloc[i]['INTERVALENDTIME_GMT']:
+                missing_data.append(i)
+                print("curr end: %s next start: %s" % (df_sol.iloc[i]['INTERVALENDTIME_GMT'], df_sol.iloc[i+1]['INTERVALSTARTTIME_GMT']))
+            # assert df_sol.iloc[i+1]['INTERVALSTARTTIME_GMT'] == df_sol.iloc[i]['INTERVALENDTIME_GMT'], "loc %i: sol[i+1][start]=%s sol[i][end]=%s" % (i, df_sol.iloc[i+1]['INTERVALSTARTTIME_GMT'], df_sol.iloc[i]['INTERVALENDTIME_GMT'])
     
         # TODO: Why is the length 719 rather than 720=24*30?
         actual_solar_arr = np.append(actual_solar_arr, df_sol['MW'].values)
+        shift = 0
+        for shift, i in enumerate(missing_data):
+            if i == 0:
+                actual_solar_arr = np.append(actual_solar_arr[0], actual_solar_arr)
+            elif i == len(missing_data)-1:
+                actual_solar_arr = np.append(actual_solar_arr, actual_solar_arr[-1])
+            else:
+                interp_data = np.mean(actual_solar_arr[i-1+shift:i+1+shift])
+                actual_solar_arr = np.append(actual_solar_arr[:i+shift], np.append(interp_data, actual_solar_arr[i+shift:]))
+
+        assert len(actual_solar_arr) % 24 == 0
     
         if print_data:
             print(f"#lmps={len(lmp_arr)} #demands={len(demand_arr)} #solar={len(solar_arr)} #winds={len(wind_arr)}")
+
+    assert len(demand_arr) == len(solar_arr) == len(wind_arr) == len(actual_demand_arr) == len(actual_solar_arr), \
+        "demand: %i, solar: %i, wind: %i, actual_demand: %i, actual_solar: %i" % (len(demand_arr), len(solar_arr), len(wind_arr), len(actual_demand_arr), len(actual_solar_arr))
+    assert len(lmp_arr) == 4*len(demand_arr)
     
     # simple data analysis
     if print_data:
@@ -143,7 +177,7 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
         print(f"Extrema wind  : {np.min(wind_arr)}, {np.mean(wind_arr)}, {np.max(wind_arr)}")
         print(f"Extrema solar : {np.min(solar_arr)}, {np.mean(solar_arr)}, {np.max(solar_arr)}")
 
-    return (lmp_arr, demand_arr, solar_arr, wind_arr, actual_solar_arr)
+    return (lmp_arr, demand_arr, solar_arr, wind_arr, actual_demand_arr, actual_solar_arr)
 
 def simple_visualization():
     lmp_arr, demand_arr, solar_arr, wind_arr = get_caiso_data()
