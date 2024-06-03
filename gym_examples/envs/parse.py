@@ -150,17 +150,13 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
             # assert df_sol.iloc[i+1]['INTERVALSTARTTIME_GMT'] == df_sol.iloc[i]['INTERVALENDTIME_GMT'], "loc %i: sol[i+1][start]=%s sol[i][end]=%s" % (i, df_sol.iloc[i+1]['INTERVALSTARTTIME_GMT'], df_sol.iloc[i]['INTERVALENDTIME_GMT'])
     
         # TODO: Why is the length 719 rather than 720=24*30?
-        actual_solar_arr = np.append(actual_solar_arr, df_sol['MW'].values)
+        curr_actual_solar_vals = np.copy(df_sol['MW'].values)
         shift = 0
         for shift, i in enumerate(missing_data):
-            if i == 0:
-                actual_solar_arr = np.append(actual_solar_arr[0], actual_solar_arr)
-            elif i == len(missing_data)-1:
-                actual_solar_arr = np.append(actual_solar_arr, actual_solar_arr[-1])
-            else:
-                interp_data = np.mean(actual_solar_arr[i-1+shift:i+1+shift])
-                actual_solar_arr = np.append(actual_solar_arr[:i+shift], np.append(interp_data, actual_solar_arr[i+shift:]))
+            interp_data = np.mean(curr_actual_solar_vals[i+shift:i+2+shift])
+            curr_actual_solar_vals = np.append(curr_actual_solar_vals[:i+shift+1], np.append(interp_data, curr_actual_solar_vals[i+shift+1:]))
 
+        actual_solar_arr = np.append(actual_solar_arr, curr_actual_solar_vals)
         assert len(actual_solar_arr) % 24 == 0
     
         if print_data:
