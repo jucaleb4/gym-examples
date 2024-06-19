@@ -13,12 +13,13 @@ class TestRiskAdversePortfolioEnv(unittest.TestCase):
     T = 4
     R = np.sqrt(n)
     
-    def get_portfolio_env(): 
+    def get_portfolio_env(rho=0): 
         return gym.make(
             "gym_examples/GiniPortfolioEnv-v0", 
             n=TestRiskAdversePortfolioEnv.n, 
             T=TestRiskAdversePortfolioEnv.T, 
             R=TestRiskAdversePortfolioEnv.R,
+            rho=rho,
             max_episode_steps=1000,
         )
 
@@ -147,19 +148,53 @@ class TestRiskAdversePortfolioEnv(unittest.TestCase):
         action = 1./n - obs['holdings']
 
         # calculate next Gini with a fixed action by solving LP
-        # Since we use inequalities to model absolute value, need to
-        # maximize excess Gini (x[-1]) to ensure absolute values are tight
+        # We want to minimize excess Gini (x[-1])
         x = cp.Variable(n+T)
-        prob = cp.Problem(cp.Maximize(x[-1]), [A @ x <= b, x[:n] == action])
+        prob = cp.Problem(cp.Minimize(x[-1]), [A @ x <= b, x[:n] == action])
         prob.solve()
 
         self.assertEqual(prob.status, 'optimal')
         # remove Gini excess
         excess_gini = x.value[-1]
         # Gini contribution wrt return y_(T+1)
-        Gini_partial = np.dot(A[-4], np.array(x.value)) - excess_gini
+        Gini_partial = np.dot(A[-4], np.array(x.value)) + excess_gini
         expected_Gini = Gini_partial + Gini_partial_next
 
         # apply next action 
-        obs, _, _, _, info = env.step(action)
-        self.assertAlmostEqual(expected_Gini, info['Gini'])
+        obs = env.step(action)[0]
+        self.assertAlmostEqual(expected_Gini, obs['Gini'])
+
+    def test_penalty_f_and_df(self):
+        """ Check the penalty function and its derivatve for excess Gini """
+        rho = 1+999*np.random.random()
+        env = TestRiskAdversePortfolioEnv.get_portfolio_env(rho)
+        obs, info = env.reset()
+
+        A = info['A']
+        penalty_f = info['penalty_f']
+        penalty_df= info['penalty_df']
+        x = np.zeros(A.shape[1], dtype=float)
+
+        # negative excess Gini
+        x[-1] = -100*np.random.random() + TestRiskAdversePortfolioEnv.R
+        f = penalty_f(x)
+        df = penalty_df(x)
+        self.assertEqual(f, 0)
+        self.assertEqual(df[-1], 0)
+        self.assertAlmostEqual(la.norm(df), 0)
+
+        # no excess Gini
+        x[-1] = TestRiskAdversePortfolioEnv.R
+        f = penalty_f(x)
+        df = penalty_df(x)
+        self.assertEqual(f, 0)
+        self.assertEqual(df[-1], 0)
+        self.assertAlmostEqual(la.norm(df), 0)
+
+        # excess Gini
+        x[-1] = 100*np.random.random() + TestRiskAdversePortfolioEnv.R
+        f = penalty_f(x)
+        df = penalty_df(x)
+        self.assertAlmostEqual(f, rho * (x[-1] - TestRiskAdversePortfolioEnv.R))
+        self.assertEqual(df[-1], rho)
+        self.assertAlmostEqual(la.norm(df), rho)
