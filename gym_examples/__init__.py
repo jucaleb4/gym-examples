@@ -24,3 +24,9 @@ register(
     entry_point="gym_examples.envs:LQREnv",
     max_episode_steps=1000,
 )
+
+register(
+    id="gym_examples/GiniPortfolioEnv-v0",
+    entry_point="gym_examples.envs:GiniPortfolioEnv",
+    max_episode_steps=1000,
+)
