@@ -103,7 +103,7 @@ class SimpleBatteryEnv(gym.Env):
             raise Exception("You must pass 'pnode_id' as argument into BatteryEnv")
 
         self.load_data(season)
-        self.penalty_rate = -np.max(self.lmp_arr)/20
+        self.penalty_rate = -np.max(self.rt_lmp_arr)/20
         self.setup_observation_space(index_offset)
         self.setup_action_space()
 
@@ -139,8 +139,9 @@ class SimpleBatteryEnv(gym.Env):
                 raise Exception("Unknown season=%s; must be 'W', 'Sp', 'S', or 'F'" % season)
 
             caiso_data = get_caiso_data(self.pnode_id, startdates, enddates)
-            lmp_arr, demand_arr, solar_arr, wind_arr, actual_demand_arr, actual_solar_arr = caiso_data
-            self.lmp_arr = lmp_arr
+            rt_lmp_arr, dam_lmp_arr, demand_arr, solar_arr, wind_arr, actual_demand_arr, actual_solar_arr = caiso_data
+            self.rt_lmp_arr = rt_lmp_arr
+            self.dam_lmp_arr = dam_lmp_arr
             self.demand_arr = demand_arr 
             self.solar_arr = solar_arr
             self.wind_arr = wind_arr
@@ -154,7 +155,7 @@ class SimpleBatteryEnv(gym.Env):
         elif self.data == Mode.PERIODIC_DATA:
             [lo, hi] = [-225, 725]
             ndata = 90 * 4 * 24
-            self.lmp_arr = (hi-lo)/2 * (np.sin(np.arange(ndata) * 2 * np.pi/(4*24)) + 1) + (hi+lo)/2
+            self.rt_lmp_arr = (hi-lo)/2 * (np.sin(np.arange(ndata) * 2 * np.pi/(4*24)) + 1) + (hi+lo)/2
 
     def setup_observation_space(self, index_offset):
         """
@@ -182,12 +183,12 @@ class SimpleBatteryEnv(gym.Env):
         self.start_index = index_offset
         self.time_step = self.start_index
 
-        lows = np.append(0, [np.min(self.lmp_arr)]*self.nhistory)
-        highs = np.append(self.battery_capacity, [np.max(self.lmp_arr)]*self.nhistory)
+        lows = np.append(0, [np.min(self.rt_lmp_arr)]*self.nhistory)
+        highs = np.append(self.battery_capacity, [np.max(self.rt_lmp_arr)]*self.nhistory)
         dt["battery_soc"] = spaces.Box(low=0, high=self.battery_capacity)
         dt["lmps"] = spaces.Box(
-            low=np.min(self.lmp_arr), 
-            high=np.max(self.lmp_arr), 
+            low=np.min(self.rt_lmp_arr), 
+            high=np.max(self.rt_lmp_arr), 
             shape=(self.nhistory,),
         )
         if self.more_data:
@@ -210,14 +211,14 @@ class SimpleBatteryEnv(gym.Env):
             highs = np.append(highs, 2)
             dt["remaining_charges"] = spaces.Box(low=0, high=2, shape=())
         elif self.mode == Mode.DIFFERENCE:
-            highs = np.append(0, [np.ptp(self.lmp_arr)]*(self.nhistory-1))
+            highs = np.append(0, [np.ptp(self.rt_lmp_arr)]*(self.nhistory-1))
             lows = -highs
             highs[0] = self.battery_capacity
             dt = OrderedDict([
                 ("battery_soc", spaces.Box(low=0, high=self.battery_capacity)),
                 ("lmp_diffs", spaces.Box(
-                    low=-np.ptp(self.lmp_arr), 
-                    high=np.ptp(self.lmp_arr), 
+                    low=-np.ptp(self.rt_lmp_arr), 
+                    high=np.ptp(self.rt_lmp_arr), 
                     shape=(self.nhistory-1,)
                 )),
             ])
@@ -323,7 +324,7 @@ class SimpleBatteryEnv(gym.Env):
         rt_idx = self.time_step 
         da_idx = int(self.time_step/4) 
 
-        recent_lmps = self.lmp_arr.take(
+        recent_lmps = self.rt_lmp_arr.take(
             np.arange(rt_idx-self.nhistory+1,rt_idx+1), 
             mode="wrap")[::-1]
         obs = OrderedDict([
@@ -421,7 +422,8 @@ class SimpleBatteryEnv(gym.Env):
             "soc": self.battery_storage,
             "soc_grid": energy_from_grid,
             "soc_solar": energy_from_solar,
-            "curr_lmp": self.lmp_arr[self.time_step],
+            "curr_rt_lmp": self.rt_lmp_arr[self.time_step],
+            "curr_dam_lmp": self.dam_lmp_arr[self.time_step//4],
             "net_load": net_load,
         }
 
@@ -520,12 +522,12 @@ class SimpleBatteryEnv(gym.Env):
         # positive is energy back into grid, negative is energy from grid
         net_load = -energy_from_grid + solar_surplus
 
-        if self.time_step < len(self.lmp_arr)-1: 
+        if self.time_step < len(self.rt_lmp_arr)-1: 
             self.time_step += 1
         else:
             self.time_step = self.start_index
 
-        curr_lmp = self.lmp_arr[rt_idx] # unit: $/MWh
+        curr_lmp = self.rt_lmp_arr[rt_idx] # unit: $/MWh
         solar_reward = curr_lmp * solar_surplus
         solar_battery_reward = 0
         grid_battery_reward = 0
@@ -575,15 +577,15 @@ class SimpleBatteryEnv(gym.Env):
         self.avg_bought_lmp = 0
         self.charge_composition = []
         if options is not None and options.get("rand_start", False):
-            self.time_step = self.np_random.integers(self.start_index, len(self.lmp_arr), dtype=int)
+            self.time_step = self.np_random.integers(self.start_index, len(self.rt_lmp_arr), dtype=int)
         if self.reset_mode == "rand":
             self.time_step = self.np_random.integers(
                 self.start_index, 
-                len(self.lmp_arr),
+                len(self.rt_lmp_arr),
                 dtype=int
             )
         elif options is not None:
-            self.time_step = options.get("start", 0) % (len(self.lmp_arr) - self.start_index) + self.start_index
+            self.time_step = options.get("start", 0) % (len(self.rt_lmp_arr) - self.start_index) + self.start_index
         else:
             self.time_step = self.start_index
 

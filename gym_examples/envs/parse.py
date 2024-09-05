@@ -36,7 +36,8 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
     """
     Parses and returns data for ____ during 06/30/2023-08/30/2023
 
-    :return lmp_arr: RT (every 15m) LMP (unit: $/MWh)
+    :return rt_lmp_arr: RT (every 15m) LMP (unit: $/MWh)
+    :return dam_lmp_arr: RT (every 15m) LMP (unit: $/MWh)
     :return demand_arr: DA (every 1hr) demand power (unit: MW)
     :return solar_arr: DA (every 1hr) solar power forecast (unit: MW)
     :return wind_arr: DA (every 1hr) wind power forecast (unit: MW)
@@ -48,7 +49,8 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
         raise Exception("Cannot find the root path %s" % root)
         # root = os.path.join(os.path.expanduser("~"), "Code", "github", "gym-examples/gym_examples/envs")
 
-    lmp_arr = np.array([], dtype=float)
+    rt_lmp_arr = np.array([], dtype=float)
+    dam_lmp_arr = np.array([], dtype=float)
     demand_arr = np.array([], dtype=float)
     solar_arr = np.array([], dtype=float)
     wind_arr = np.array([], dtype=float)
@@ -67,13 +69,15 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
 
         lmp_root_name = os.path.join(root, node_id, "%s_%s" % (startdate, enddate))
         root_name = os.path.join(root, "COMMON", "%s_%s" % (startdate, enddate))
-        lmp_wildcard_name = "%s_CLEAN_PRC_RTPD_LMP_RTPD_*.csv" % lmp_root_name
+        rt_lmp_wildcard_name = "%s_CLEAN_PRC_RTPD_LMP_RTPD_*.csv" % lmp_root_name
+        dam_lmp_wildcard_name = "%s_CLEAN_PRC_LMP_DAM_*.csv" % lmp_root_name
         demand_wildcard_name = "%s_SLD_FCST_DAM_*.csv" % root_name
         renew_wildcard_name = "%s_SLD_REN_FCST_DAM_*.csv" % root_name
         actual_demand_wildcard_name = "%s_SLD_FCST_ACTUAL_*.csv" % root_name
         actual_renew_wildcard_name = "%s_SLD_REN_FCST_ACTUAL_*.csv" % root_name
 
-        lmp_fname = get_fname_from_wildcard(lmp_wildcard_name)
+        rt_lmp_fname = get_fname_from_wildcard(rt_lmp_wildcard_name)
+        dam_lmp_fname = get_fname_from_wildcard(dam_lmp_wildcard_name)
         demand_fname = get_fname_from_wildcard(demand_wildcard_name)
         renew_fname = get_fname_from_wildcard(renew_wildcard_name)
         actual_demand_fname = get_fname_from_wildcard(actual_demand_wildcard_name)
@@ -90,8 +94,11 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
         # df = df.iloc[lmp_idx]
         # df = df.sort_values(by=['INTERVALSTARTTIME_GMT'])
         # lmp_arr = np.append(lmp_arr, df['PRC'].values)
-        df = pd.read_csv(lmp_fname, header='infer')
-        lmp_arr = np.append(lmp_arr, df['lmp'].values)
+        df = pd.read_csv(rt_lmp_fname, header='infer')
+        rt_lmp_arr = np.append(rt_lmp_arr, df['lmp'].values)
+
+        df = pd.read_csv(dam_lmp_fname, header='infer')
+        dam_lmp_arr = np.append(dam_lmp_arr, df['lmp'].values)
     
         # extract demand at TAC LADWP
         df = pd.read_csv(demand_fname)
@@ -106,7 +113,7 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
         if len(df['MW'].values) > 0:
             demand_arr = np.append(demand_arr, df['MW'].values)
         else:
-            demand_arr = np.append(demand_arr, np.zeros(int(len(lmp_arr)/4)))
+            demand_arr = np.append(demand_arr, np.zeros(int(len(rt_lmp_arr)/4)))
     
         # extract renewable at SP15
         df = pd.read_csv(renew_fname)
@@ -156,25 +163,25 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
         assert len(actual_solar_arr) % 24 == 0
     
         if print_data:
-            print(f"#lmps={len(lmp_arr)} #demands={len(demand_arr)} #solar={len(solar_arr)} #winds={len(wind_arr)}")
+            print(f"#lmps={len(rt_lmp_arr)} #demands={len(demand_arr)} #solar={len(solar_arr)} #winds={len(wind_arr)}")
 
     assert len(demand_arr) == len(solar_arr) == len(wind_arr) == len(actual_demand_arr) == len(actual_solar_arr), \
         "demand: %i, solar: %i, wind: %i, actual_demand: %i, actual_solar: %i" % (len(demand_arr), len(solar_arr), len(wind_arr), len(actual_demand_arr), len(actual_solar_arr))
-    assert len(lmp_arr) == 4*len(demand_arr)
+    assert len(rt_lmp_arr) == 4*len(demand_arr)
     
     # simple data analysis
     if print_data:
-        print(f"Extrema LMP   : {np.min(lmp_arr)}, {np.mean(lmp_arr)}, {np.max(lmp_arr)}")
+        print(f"Extrema LMP   : {np.min(rt_lmp_arr)}, {np.mean(rt_lmp_arr)}, {np.max(rt_lmp_arr)}")
         print(f"Extrema demand: {np.min(demand_arr)}, {np.mean(demand_arr)}, {np.max(demand_arr)}")
         print(f"Extrema wind  : {np.min(wind_arr)}, {np.mean(wind_arr)}, {np.max(wind_arr)}")
         print(f"Extrema solar : {np.min(solar_arr)}, {np.mean(solar_arr)}, {np.max(solar_arr)}")
 
-    return (lmp_arr, demand_arr, solar_arr, wind_arr, actual_demand_arr, actual_solar_arr)
+    return (rt_lmp_arr, dam_lmp_arr, demand_arr, solar_arr, wind_arr, actual_demand_arr, actual_solar_arr)
 
 def simple_visualization():
-    lmp_arr, demand_arr, solar_arr, wind_arr = get_caiso_data()
+    rt_lmp_arr, dam_lmp_arr, demand_arr, solar_arr, wind_arr = get_caiso_data()
 
-    lmp_hourly_arr = np.convolve(lmp_arr, (1./4)*np.ones(4), mode='valid')[::4]
+    lmp_hourly_arr = np.convolve(rt_lmp_arr, (1./4)*np.ones(4), mode='valid')[::4]
 
     # look at two weeks
     num_hours = 24 * 90
@@ -210,11 +217,11 @@ def simple_visualization():
     else:
         fig, axes = plt.subplots(nrows=2)
         num_itervals = 4 * 24 * 7
-        lmp_arr = lmp_arr[:num_itervals]
+        rt_lmp_arr = rt_lmp_arr[:num_itervals]
         rl_actions = rl_actions[:num_itervals]
-        xs = np.arange(len(lmp_arr))
+        xs = np.arange(len(rt_lmp_arr))
 
-        axes[0].plot(xs, lmp_arr, color="black")
+        axes[0].plot(xs, rt_lmp_arr, color="black")
         axes[0].set(title="RT LMP price ($)")
 
         axes[1].plot(xs, rl_actions, 'g.')
