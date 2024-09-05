@@ -1,24 +1,35 @@
-This repository is no longer maintained, as Gym is not longer maintained and all future maintenance of it will occur in the replacing [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) library. You can contribute Gymnasium examples to the Gymnasium repository and docs directly if you would like to. If you'd like to learn more about the transition from Gym to Gymnasium, you can read more about it [here](https://farama.org/Announcing-The-Farama-Foundation).
+This is a fork of [Gymnasium](https://github.com/Farama-Foundation/Gymnasium)'s tutorial on building a gym example.
+The particular gym example is a simple grid-scale battery energy storage systems (BESS) co-located with photovoltaic (PV).
+Real-time and day-ahead location marginal prices (LMPs), solar, and other auxiliary data are downloaded from the CAISO's (California Independent System) [OASIS](https://www.caiso.com/systems-applications/portals-applications/open-access-same-time-information-system-oasis).
+To setup the the code, we need to download the data. 
 
-# Gym Examples
-Some simple examples of Gym environments and wrappers.
-For some explanations of these examples, see the [Gym documentation](https://gymnasium.farama.org).
+# Data download
+`cd` into the directory `gym_examples/envs`. From here, you will download the data via a script. For example, to download real-time LMPs:
+``` 
+python download.py --year <year> --node_id <node_id>
+```
 
-### Environments
-This repository hosts the examples that are shown [on the environment creation documentation](https://gymnasium.farama.org/tutorials/environment_creation/).
-- `GridWorldEnv`: Simplistic implementation of gridworld environment
+where we used the year 2023 (but you can use others if desired) and `node_id` can be
+- COTWDPGE_1_N001
+- ALAMT3G_7_B1
+- PAULSWT_1_N013
+- FREMNT_1_N013
 
-### Wrappers
-This repository hosts the examples that are shown [on wrapper documentation](https://gymnasium.farama.org/api/wrappers/).
-- `ClipReward`: A `RewardWrapper` that clips immediate rewards to a valid range
-- `DiscreteActions`: An `ActionWrapper` that restricts the action space to a finite subset
-- `RelativePosition`: An `ObservationWrapper` that computes the relative position between an agent and a target
-- `ReacherRewardWrapper`: Allow us to weight the reward terms for the reacher environment
+These for pnodes were selected for the experiments in the paper due to their geography and LMP characteristic.
+Download times for this can take about 10 minutes due to the size of the datasets.
+Download times for the other dataset (i.e., the ones below) are quicker since the files are smaller.
 
-### Contributing
-If you would like to contribute, follow these steps:
-- Fork this repository
-- Clone your fork
-- Set up pre-commit via `pre-commit install`
+To download day-ahead LMPs,
+``` 
+python download.py --year 2023 --node_id <node_id> --dam_mkt
+```
 
-PRs may require accompanying PRs in [the documentation repo](https://github.com/Farama-Foundation/Gymnasium/tree/main/docs).
+To download auxiliary data (e.g., solar, demand), 
+``` 
+python download.py --year 2023 --auxiliary
+```
+Notice we do not specify the pnode. This is because this auxiliary data is downloaded for regions (not pnodes).
+The file `gym_examples/envs/oasis_header.csv` contains custom mappings from some pnodes to the correct regions.
+
+# Setting up BatteryEnv with Gymnasium
+Follow Gymnasium's [tutorial](https://gymnasium.farama.org/tutorials/gymnasium_basics/environment_creation/#sphx-glr-tutorials-gymnasium-basics-environment-creation-py) for how to install after downloading the dataset.

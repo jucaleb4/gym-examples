@@ -6,7 +6,6 @@ from enum import Enum
 
 import numpy as np
 import numpy.linalg as la
-# import pygame
 
 import gymnasium as gym
 from gymnasium import spaces

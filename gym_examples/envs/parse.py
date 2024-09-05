@@ -43,10 +43,6 @@ def get_caiso_data(node_id, startdates, enddates, print_data=False):
     :return actual_solar_arr: DA (every 1 hr) actual solar (unit: MW)
     """
  
-    # root = "/storage/home/hcoda1/9/cju33/gym-examples/gym_examples/envs"
-    # root = "/Users/calebju/Code/github/gym-examples/gym_examples/envs"
-    # TODO: The location of `Github` needs to be changed on ad-hoc basis
-    # root = os.path.join(os.path.expanduser("~"), "gym-examples", "gym_examples", "envs", node_id)
     root = os.path.dirname(os.path.abspath(__file__))
     if not os.path.exists(root):
         raise Exception("Cannot find the root path %s" % root)
