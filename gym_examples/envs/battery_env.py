@@ -77,6 +77,7 @@ class SimpleBatteryEnv(gym.Env):
         self.avoid_penalty = bool(kwargs.get("avoid_penalty", False))
         self.delay_cost = bool(kwargs.get("delay_cost", False))
         self.daily_cost = float(kwargs.get("daily_cost", 0))
+        self.leak_energy = bool(kwargs.get("leak_energy", True))
         self.mode = Mode.DEFAULT
         self.data = Mode.REAL_DATA
         self.pnode_id = pnode_id
@@ -115,28 +116,44 @@ class SimpleBatteryEnv(gym.Env):
 
     def load_data(self, seasonyear):
         if self.data == Mode.REAL_DATA:
+            # split W23 -> [W, 23]
             seasonyear_split = list(filter(None, re.split(r'(\d+)', seasonyear)))
             if len(seasonyear_split) != 2:
                 raise Exception("Given invalid season %s, must be SeasonYear" % seasonyear)
             season = seasonyear_split[0]
             yr = int(seasonyear_split[1])
             if season == 'W':
-                startdates = ["20%i1201" % (yr-1), "20%i1231" % (yr-1), "20%i0101" % yr, "20%i0131" % yr, "20%i0201" % yr]
+                startdates = ["20%i1201" % (yr-1), "20%i1231" % (yr-1), "20%i0101" % yr, "20%i0131" % yr, "20%i0201" % yr, ]
                 enddates = ["20%i1231" % (yr-1), "20%i0101" % yr, "20%i0131" % yr, "20%i0201" % yr, "20%i0301" % yr]
+                # extra dates from DAM
+                startdates += ["20%i0301" % yr]
+                enddates += ["20%i0331" % yr]
             elif season == 'w':
                 startdates = ["20%i0101" % (yr), "20%i0131" % (yr), "20%i0201" % yr, "20%i0301" % yr, "20%i0331" % yr]
                 enddates = ["20%i0131" % (yr), "20%i0201" % yr, "20%i0301" % yr, "20%i0331" % yr, "20%i0401" % yr]
+                # extra dates from DAM
+                startdates += ["20%i0401" % yr]
+                enddates += ["20%i0501" % yr]
             elif season == 'Sp':
                 startdates = ["20%i0301" % yr, "20%i0331" % yr, "20%i0401" % yr, "20%i0501" % yr, "20%i0531" % yr]
                 enddates = ["20%i0331" % yr, "20%i0401" % yr, "20%i0501" % yr, "20%i0531" % yr, "20%i0601" % yr]
+                # extra dates from DAM
+                startdates += ["20%i0601" % yr]
+                enddates += ["20%i0701" % yr]
             elif season == 'S':
                 startdates = ["20%i0601" % yr, "20%i0701" % yr, "20%i0731" % yr, "20%i0801" % yr, "20%i0831" % yr]
                 enddates = ["20%i0701" % yr, "20%i0731" % yr, "20%i0801" % yr, "20%i0831" % yr, "20%i0901" % yr]
+                # extra dates from DAM
+                startdates += ["20%i0901" % yr]
+                enddates += ["20%i1001" % yr]
             elif season == 'F':
                 startdates = ["20%i0901" % yr, "20%i1001" % yr, "20%i1031" % yr, "20%i1101" % yr]
                 enddates = ["20%i1001" % yr, "20%i1031" % yr, "20%i1101" % yr, "20%i1201" % yr]
+                # extra dates from DAM
+                startdates += ["20%i1201" % yr]
+                enddates += ["20%i1231" % yr]
             else:
-                raise Exception("Unknown season=%s; must be 'W', 'Sp', 'S', or 'F'" % season)
+                raise Exception("Unknown season=%s; must be 'W', 'w', 'Sp', 'S', or 'F'" % season)
 
             caiso_data = get_caiso_data(self.pnode_id, startdates, enddates)
             rt_lmp_arr, dam_lmp_arr, demand_arr, solar_arr, wind_arr, actual_demand_arr, actual_solar_arr = caiso_data
@@ -152,6 +169,7 @@ class SimpleBatteryEnv(gym.Env):
             scale = self.solar_scale * min(1, self.battery_power/la.norm(self.actual_solar_arr, ord=np.inf))
             # small values are not too small, so we zero out
             self.actual_solar_arr = scale * np.maximum(0, self.actual_solar_arr)
+            print(">>> TEMP: median solar (MW): %.2f" % np.mean(self.actual_solar_arr))
         elif self.data == Mode.PERIODIC_DATA:
             [lo, hi] = [-225, 725]
             ndata = 90 * 4 * 24
@@ -455,7 +473,7 @@ class SimpleBatteryEnv(gym.Env):
             solar_power = 0
 
         # apply battery degradation
-        if self.battery_storage >= 0.9*self.battery_capacity:
+        if self.leak_energy and self.battery_storage >= 0.9*self.battery_capacity:
             battery_leak_amt = 0.1/(4*24) * self.battery_storage
             self.battery_storage -= battery_leak_amt
             last_charge = None
