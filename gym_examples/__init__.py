@@ -48,3 +48,9 @@ register(
     entry_point="gym_examples.envs:ComputedTomographyEnv",
     max_episode_steps=1000,
 )
+
+register(
+    id="gym_examples/Ptychography-v0",
+    entry_point="gym_examples.envs:PtychographyEnv",
+    max_episode_steps=1000,
+)
