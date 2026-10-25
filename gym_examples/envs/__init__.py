@@ -8,3 +8,4 @@ from gym_examples.envs.simple_world import SimpleWorldEnv
 from gym_examples.envs.lqr import LQREnv
 from gym_examples.envs.risk_adverse_portfolio import GiniPortfolioEnv
 from gym_examples.envs.inventory import InventoryEnv
+from gym_examples.envs.computed_tomography import ComputedTomographyEnv

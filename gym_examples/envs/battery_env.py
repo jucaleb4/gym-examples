@@ -29,7 +29,7 @@ class SimpleBatteryEnv(gym.Env):
     def __init__(
             self, 
             render_mode=None, 
-            pnode_id=None,
+            pnode_id="ALAMT3G_7_B1", # None,
             battery_capacity=400, 
             battery_power=100, 
             efficiency=0.93,
@@ -71,8 +71,8 @@ class SimpleBatteryEnv(gym.Env):
         # below are settings for the environment
         self.more_data = bool(kwargs.get("more_data", False))
         self.solar_coloc = bool(kwargs.get("solar_coloc", False))
-        self.solar_scale = kwargs.get("solar_scale", 0.)
-        self.nhistory = int(kwargs.get("nhistory", 16))
+        self.solar_scale = kwargs.get("solar_scale", 1.)
+        self.nhistory = int(kwargs.get("nhistory", 3)) # int(kwargs.get("nhistory", 16))
         self.nhistory_hour = max(1, int(self.nhistory/4))
         self.avoid_penalty = bool(kwargs.get("avoid_penalty", False))
         self.delay_cost = bool(kwargs.get("delay_cost", False))

@@ -42,3 +42,9 @@ register(
     entry_point="gym_examples.envs:InventoryEnv",
     max_episode_steps=32,
 )
+
+register(
+    id="gym_examples/ComputedTomography-v0",
+    entry_point="gym_examples.envs:ComputedTomographyEnv",
+    max_episode_steps=1000,
+)
