@@ -19,6 +19,13 @@ def forward_eval(image, theta, percentage=0.0):
 
     return sinogram_n
 
+def psnr(target, ref):
+    diff = ref - target
+    diff = diff.flatten('C')
+    rmse = math.sqrt(np.mean(diff ** 2.))
+    #print(rmse)
+    return 20*math.log10(1.0/rmse)
+
 class ComputedTomographyEnv(gym.Env):
     def __init__(self, seed, n_images, num_angles, image_size, action_size,
         corruption_percentage, pnsr_reg, image_type, reward_type,
